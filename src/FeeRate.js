@@ -18,7 +18,7 @@ class FeeRate {
 
     let nFee = (this.nSatoshisPerK * transactionSizeInBytes) / 1000;
 
-    if (nFee === 0 && nSize !== 0) {
+    if (nFee === 0 && transactionSizeInBytes !== 0) {
       if (this.nSatoshisPerK > 0) { nFee = CAmount(1); }
       if (this.nSatoshisPerK < 0) { nFee = CAmount(-1); }
     }

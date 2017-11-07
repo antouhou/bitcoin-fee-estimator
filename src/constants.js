@@ -39,6 +39,7 @@ const FeeReason = {
   FULL_ESTIMATE: 'Target 85% Threshold',
   DOUBLE_ESTIMATE: 'Double Target 95% Threshold',
   CONSERVATIVE: 'Conservative Double Target longer horizon',
+  NONE: 'None',
 };
 
 module.exports = {
@@ -61,5 +62,5 @@ module.exports = {
   FEE_SPACING,
   INF_FEERATE,
   OLDEST_ESTIMATE_HISTORY,
-  FeeReason
+  FeeReason,
 };
