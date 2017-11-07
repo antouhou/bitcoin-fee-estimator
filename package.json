@@ -1,0 +1,25 @@
+{
+  "name": "bitcoin-fee-estimator",
+  "version": "1.0.0",
+  "description": "Implemetnation of fee estimation algorithm of bitcoin-core 0.15.x in JavaScript",
+  "main": "index.js",
+  "scripts": {
+    "test": "test"
+  },
+  "repository": {
+    "type": "git",
+    "url": "none right now"
+  },
+  "keywords": [
+    "dash",
+    "bitcoin",
+    "fee"
+  ],
+  "author": "antouhou (Anton Suprunchuk)",
+  "license": "ISC",
+  "devDependencies": {
+    "eslint": "^4.10.0",
+    "eslint-config-airbnb-base": "^12.1.0",
+    "eslint-plugin-import": "^2.8.0"
+  }
+}
