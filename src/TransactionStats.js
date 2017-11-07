@@ -1,4 +1,5 @@
 const EstimatorBucket = require('./EstimatorBucket');
+const EstimationResult = require('./EstimationResult');
 
 class TransactionStats {
   constructor(buckets, bucketMap, blockPeriods, decay, scale) {
@@ -25,7 +26,7 @@ class TransactionStats {
   }
 
   // buckets is mempool transactions grouped by feerate
-  estimateMedianVal(confTarget, sufficientTxVal, successBreakPoint, requireGreater, nBlockHeight, result) {
+  estimateMedianVal(confTarget, sufficientTxVal, successBreakPoint, requireGreater, nBlockHeight) {
     // TODO: big fat todo: is it really should be transaction from mempool or transactions out of mempool or both?
     const {
       unconfirmedTransactions,
@@ -175,14 +176,12 @@ class TransactionStats {
     //   (100 * failBucket.withinTarget) / (failBucket.totalConfirmed + failBucket.inMempool + failBucket.leftMempool),
     //   failBucket.withinTarget, failBucket.totalConfirmed, failBucket.inMempool, failBucket.leftMempool,
     // );
+    const result = new EstimationResult(passBucket, failBucket, this.decay, this.scale);
 
-    if (result) {
-      result.pass = passBucket;
-      result.fail = failBucket;
-      result.decay = this.decay;
-      result.scale = this.scale;
-    }
-    return median;
+    return [
+      median,
+      result,
+    ];
   }
 }
 

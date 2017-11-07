@@ -1,4 +1,5 @@
 const TransactionStats = require('./TransactionStats');
+const EstimationResult = require('./EstimationResult');
 const {
   SHORT_BLOCK_PERIODS,
   SHORT_SCALE,
@@ -22,8 +23,7 @@ const {
 } = require('./constants');
 
 class Estimator {
-  constructor(transactionsInMempool = []) {
-    this.transactionsInMempool = transactionsInMempool;
+  constructor() {
     this.buckets = [];
     this.bucketMap = {};
     // : nBestSeenHeight(0), firstRecordedHeight(0), historicalFirst(0), historicalBest(0), trackedTxs(0), untrackedTxs(0)
@@ -40,34 +40,35 @@ class Estimator {
     this.longStats = new TransactionStats(this.buckets, this.bucketMap, LONG_BLOCK_PERIODS, LONG_DECAY, LONG_SCALE);
   }
 
-  setTransactionsMempolData(transactionsInMempool) {
-    this.transactionsInMempool = Object.assign({}, transactionsInMempool);
-  }
-
-  estimateSmartFee(confirmationTarget, feeCalculation, isConservative) {
+  estimateSmartFee(confirmationTarget, feeCalc, isConservative) {
+    let target = confirmationTarget;
+    const feeCalculation = feeCalc;
     if (feeCalculation) {
-      feeCalculation.desiredTarget = confirmationTarget;
-      feeCalculation.returnedTarget = confirmationTarget;
+      feeCalculation.desiredTarget = target;
+      feeCalculation.returnedTarget = target;
     }
 
     let median;
-    let tempResult; // todo add class EstimationResult
+    let halfEst = -1;
+    let actualEst = -1;
+    let doubleEst = -1;
+    let estimationResult = new EstimationResult();
 
     // Return failure if trying to analyze a target we're not tracking
-    if (confirmationTarget <= 0 || confirmationTarget > this.longStats.getMaxConfirms()) {
+    if (target <= 0 || target > this.longStats.getMaxConfirms()) {
       return CFeeRate(0); // error condition
     }
 
     // It's not possible to get reasonable estimates for confTarget of 1
-    if (confirmationTarget === 1) { confirmationTarget = 2; }
+    if (target === 1) { target = 2; }
 
     const maxUsableEstimate = MaxUsableEstimate();
-    if (confirmationTarget > maxUsableEstimate) {
-      confirmationTarget = maxUsableEstimate;
+    if (target > maxUsableEstimate) {
+      target = maxUsableEstimate;
     }
-    if (feeCalculation) feeCalculation.returnedTarget = confirmationTarget;
+    if (feeCalculation) feeCalculation.returnedTarget = target;
 
-    if (confirmationTarget <= 1) return CFeeRate(0); // error condition
+    if (target <= 1) return CFeeRate(0); // error condition
     /** true is passed to estimateCombined fee for target/2 and target so
      * that we check the max confirms for shorter time horizons as well.
      * This is necessary to preserve monotonically increasing estimates.
@@ -78,35 +79,35 @@ class Estimator {
      * the purpose of conservative estimates is not to let short term
      * fluctuations lower our estimates by too much.
      */
-    const halfEst = this.estimateCombinedFee(confirmationTarget / 2, HALF_SUCCESS_PCT, true, tempResult);
+    [halfEst, estimationResult] = this.estimateCombinedFee(target / 2, HALF_SUCCESS_PCT, true, estimationResult);
     if (feeCalculation) {
-      feeCalculation.est = tempResult;
+      feeCalculation.est = estimationResult;
       feeCalculation.reason = FeeReason.HALF_ESTIMATE;
     }
     median = halfEst;
-    const actualEst = this.estimateCombinedFee(confirmationTarget, SUCCESS_PCT, true, tempResult);
+    [actualEst, estimationResult] = this.estimateCombinedFee(target, SUCCESS_PCT, true, estimationResult);
     if (actualEst > median) {
       median = actualEst;
       if (feeCalculation) {
-        feeCalculation.est = tempResult;
+        feeCalculation.est = estimationResult;
         feeCalculation.reason = FeeReason.FULL_ESTIMATE;
       }
     }
-    const doubleEst = this.estimateCombinedFee(2 * confirmationTarget, DOUBLE_SUCCESS_PCT, !isConservative, tempResult);
+    [doubleEst, estimationResult] = this.estimateCombinedFee(2 * target, DOUBLE_SUCCESS_PCT, !isConservative, estimationResult);
     if (doubleEst > median) {
       median = doubleEst;
       if (feeCalculation) {
-        feeCalculation.est = tempResult;
+        feeCalculation.est = estimationResult;
         feeCalculation.reason = FeeReason.DOUBLE_ESTIMATE;
       }
     }
 
     if (isConservative || median === -1) {
-      const consEst = estimateConservativeFee(2 * confirmationTarget, tempResult);
+      const consEst = estimateConservativeFee(2 * target, estimationResult);
       if (consEst > median) {
         median = consEst;
         if (feeCalculation) {
-          feeCalculation.est = tempResult;
+          feeCalculation.est = estimationResult;
           feeCalculation.reason = FeeReason.CONSERVATIVE;
         }
       }
@@ -121,23 +122,25 @@ class Estimator {
    * time horizon which tracks confirmations up to the desired target.  If
    * checkShorterHorizon is requested, also allow short time horizon estimates
    * for a lower target to reduce the given answer */
-  estimateCombinedFee(confTarget, successThreshold, checkShorterHorizon, result) {
+  estimateCombinedFee(confirmationTarget, successThreshold, checkShorterHorizon) {
     const { shortStats, feeStats, longStats } = this;
     let estimate = -1;
-    if (confTarget >= 1 && confTarget <= longStats.getMaxConfirms()) {
+    let result = new EstimationResult();
+
+    if (confirmationTarget >= 1 && confirmationTarget <= longStats.getMaxConfirms()) {
       // Find estimate from shortest time horizon possible
-      if (confTarget <= shortStats.getMaxConfirms()) { // short horizon
-        estimate = shortStats.estimateMedianVal(confTarget, SUFFICIENT_TXS_SHORT, successThreshold, true, nBestSeenHeight, result);
-      } else if (confTarget <= feeStats.getMaxConfirms()) { // medium horizon
-        estimate = feeStats.estimateMedianVal(confTarget, SUFFICIENT_FEETXS, successThreshold, true, nBestSeenHeight, result);
+      if (confirmationTarget <= shortStats.getMaxConfirms()) { // short horizon
+        [estimate, result] = shortStats.estimateMedianVal(confirmationTarget, SUFFICIENT_TXS_SHORT, successThreshold, true, nBestSeenHeight);
+      } else if (confirmationTarget <= feeStats.getMaxConfirms()) { // medium horizon
+        [estimate, result] = feeStats.estimateMedianVal(confirmationTarget, SUFFICIENT_FEETXS, successThreshold, true, nBestSeenHeight);
       } else { // long horizon
-        estimate = longStats.estimateMedianVal(confTarget, SUFFICIENT_FEETXS, successThreshold, true, nBestSeenHeight, result);
+        [estimate, result] = longStats.estimateMedianVal(confirmationTarget, SUFFICIENT_FEETXS, successThreshold, true, nBestSeenHeight);
       }
+
       if (checkShorterHorizon) {
-        let tempResult;
         // If a lower confTarget from a more recent horizon returns a lower answer use it.
-        if (confTarget > feeStats.getMaxConfirms()) {
-          const medMax = feeStats.estimateMedianVal(feeStats.getMaxConfirms(), SUFFICIENT_FEETXS, successThreshold, true, nBestSeenHeight, tempResult);
+        if (confirmationTarget > feeStats.getMaxConfirms()) {
+          const [medMax, tempResult] = feeStats.estimateMedianVal(feeStats.getMaxConfirms(), SUFFICIENT_FEETXS, successThreshold, true, nBestSeenHeight);
           if (medMax > 0 && (estimate === -1 || medMax < estimate)) {
             estimate = medMax;
             if (result) {
@@ -145,8 +148,8 @@ class Estimator {
             }
           }
         }
-        if (confTarget > shortStats.getMaxConfirms()) {
-          const shortMax = shortStats.estimateMedianVal(shortStats.getMaxConfirms(), SUFFICIENT_TXS_SHORT, successThreshold, true, nBestSeenHeight, tempResult);
+        if (confirmationTarget > shortStats.getMaxConfirms()) {
+          const [shortMax, tempResult] = shortStats.estimateMedianVal(shortStats.getMaxConfirms(), SUFFICIENT_TXS_SHORT, successThreshold, true, nBestSeenHeight);
           if (shortMax > 0 && (estimate === -1 || shortMax < estimate)) {
             estimate = shortMax;
             if (result) {
@@ -156,7 +159,7 @@ class Estimator {
         }
       }
     }
-    return estimate;
+    return [estimate, result];
   }
 }
 
