@@ -62,6 +62,81 @@ class TransactionStats {
     this.blockPeriods = maxPeriods;
   }
 
+  clearCurrent(blockHeight) {
+    for (let j = 0; j < this.buckets.length; j++) {
+      this.oldUnconfirmedTransactions[j] += this.unconfirmedTransactions[blockHeight % this.unconfirmedTransactions.length][j];
+      this.unconfirmedTransactions[blockHeight % this.unconfirmedTransactions.length][j] = 0;
+    }
+  }
+
+  record(blocksToConfirm, val) {
+    // blocksToConfirm is 1-based
+    if (blocksToConfirm < 1) { return; }
+    const periodsToConfirm = ((blocksToConfirm + this.scale) - 1) / this.scale;
+    // todo: js do not have implementation of map.lower_bound. Research needed
+    // Actually bucketMap keys is array of numbers, so it should be easy to implement
+    const bucketIndex = this.bucketMap.lower_bound(val).second;
+    for (let i = periodsToConfirm; i <= this.confirmationAverage.length; i++) {
+      this.confirmationAverage[i - 1][bucketIndex]++;
+    }
+    this.averageTransactionConfirmTimes[bucketIndex]++;
+    this.average[bucketIndex] += val;
+  }
+
+  updateMovingAverages() {
+    for (let j = 0; j < this.buckets.length; j++) {
+      for (let i = 0; i < this.confirmationAverage.length; i++) {
+        this.confirmationAverage[i][j] = this.confirmationAverage[i][j] * this.decay;
+      }
+      for (let i = 0; i < this.failAverage.length; i++) {
+        this.failAverage[i][j] = this.failAverage[i][j] * this.decay;
+      }
+      this.average[j] = this.average[j] * this.decay;
+      this.averageTransactionConfirmTimes[j] = this.averageTransactionConfirmTimes[j] * this.decay;
+    }
+  }
+
+  addTx(blockHeight, val) {
+    // todo: what is that?
+    const bucketIndex = this.bucketMap.lower_bound(val).second;
+    const blockIndex = blockHeight % this.unconfirmedTransactions.length;
+    this.unconfirmedTransactions[blockIndex][bucketIndex]++;
+    return bucketIndex;
+  }
+
+  removeTx(entryHeight, nBestSeenHeight, bucketIndex, inBlock) {
+    // nBestSeenHeight is not updated yet for the new block
+    let blocksAgo = nBestSeenHeight - entryHeight;
+    // the Estimator hasn't seen any blocks yet
+    if (nBestSeenHeight === 0) {
+      blocksAgo = 0;
+    }
+    if (blocksAgo < 0) {
+      throw new Error('Blockpolicy error, blocks ago is negative for mempool tx');
+    }
+
+    if (blocksAgo >= this.unconfirmedTransactions.length) {
+      if (this.oldUnconfirmedTransactions[bucketIndex] > 0) {
+        this.oldUnconfirmedTransactions[bucketIndex]--;
+      } else {
+        throw new Error(`Blockpolicy error, mempool tx removed from >25 blocks,bucketIndex=%u already ${bucketIndex}`);
+      }
+    } else {
+      const blockIndex = entryHeight % this.unconfirmedTransactions.length;
+      if (this.unconfirmedTransactions[blockIndex][bucketIndex] > 0) {
+        this.unconfirmedTransactions[blockIndex][bucketIndex]--;
+      } else {
+        throw new Error(`Blockpolicy error, mempool tx removed from blockIndex=%u,bucketIndex=%u already ${blockIndex} ${bucketIndex}`);
+      }
+    }
+    // Only counts as a failure if not confirmed for entire period
+    if (!inBlock && blocksAgo >= this.scale) {
+      const periodsAgo = blocksAgo / this.scale;
+      for (let i = 0; i < periodsAgo && i < this.failAverage.length; i++) {
+        this.failAverage[i][bucketIndex]++;
+      }
+    }
+  }
   /**
    * Returns the max number of confirms we're tracking
    * @returns {number}

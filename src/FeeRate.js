@@ -25,6 +25,10 @@ class FeeRate {
 
     return nFee;
   }
+
+  getFeePerK() {
+    return this.getFee(1000);
+  }
 }
 
 module.exports = FeeRate;

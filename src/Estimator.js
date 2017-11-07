@@ -25,14 +25,15 @@ const {
 } = require('./constants');
 
 class Estimator {
-  constructor(nBestSeenHeight = 0, firstRecordedHeight = 0, historicalFirst = 0, historicalBest = 0) {
+  constructor(nBestSeenHeight = 0, firstRecordedHeight = 0, historicalFirst = 0, historicalBest = 0, trackedTxs = 0, untrackedTxs = 0) {
     this.buckets = [];
     this.bucketMap = {};
     this.nBestSeenHeight = nBestSeenHeight;
     this.firstRecordedHeight = firstRecordedHeight;
     this.historicalFirst = historicalFirst;
     this.historicalBest = historicalBest;
-    // : nBestSeenHeight(0), firstRecordedHeight(0), historicalFirst(0), historicalBest(0), trackedTxs(0), untrackedTxs(0)
+    this.trackedTxs = trackedTxs;
+    this.untrackedTxs = untrackedTxs;
     let bucketIndex = 0;
     for (let bucketBoundary = MIN_BUCKET_FEERATE; bucketBoundary <= MAX_BUCKET_FEERATE; bucketBoundary *= FEE_SPACING, bucketIndex++) {
       this.buckets.push(bucketBoundary);
@@ -44,6 +45,142 @@ class Estimator {
     this.feeStats = new TransactionStats(this.buckets, this.bucketMap, MED_BLOCK_PERIODS, MED_DECAY, MED_SCALE);
     this.shortStats = new TransactionStats(this.buckets, this.bucketMap, SHORT_BLOCK_PERIODS, SHORT_DECAY, SHORT_SCALE);
     this.longStats = new TransactionStats(this.buckets, this.bucketMap, LONG_BLOCK_PERIODS, LONG_DECAY, LONG_SCALE);
+
+    this.mempoolTransactions = {};
+  }
+
+  isTransactionAlreadyTracked(hash) {
+    return Object.keys(this.mempoolTransactions).indexOf(hash) > -1;
+  }
+
+  removeTx(hash, inBlock) {
+    const pos = Object.keys(this.mempoolTransactions).findIndex(hash);
+    const lastPosition = Object.keys(this.mempoolTransactions).length - 1;
+    // todo: Why should it give any sense?
+    if (pos !== lastPosition) {
+      this.feeStats.removeTx(pos.second.blockHeight, this.nBestSeenHeight, pos.second.bucketIndex, inBlock);
+      this.shortStats.removeTx(pos.second.blockHeight, this.nBestSeenHeight, pos.second.bucketIndex, inBlock);
+      this.longStats.removeTx(pos.second.blockHeight, this.nBestSeenHeight, pos.second.bucketIndex, inBlock);
+      delete this.mempoolTransactions[hash];
+      return true;
+    }
+    return false;
+  }
+
+  /**
+   *
+   * @param transaction mempoolTransactionEntry
+   * @param validFeeEstimate
+   */
+  processTransaction(transaction, validFeeEstimate) {
+    // todo: need to extract hash first
+    const { hash, height } = transaction;
+    if (this.isTransactionAlreadyTracked(hash)) {
+      return;
+    }
+
+    if (height !== this.nBestSeenHeight) {
+      // Ignore side chains and re-orgs; assuming they are random they don't
+      // affect the estimate.  We'll potentially double count transactions in 1-block reorgs.
+      // Ignore txs if Estimator is not in sync with chainActive.Tip().
+      // It will be synced next time a block is processed.
+      return;
+    }
+
+    // Only want to be updating estimates when our blockchain is synced,
+    // otherwise we'll miscalculate how many blocks its taking to get included.
+    if (!validFeeEstimate) {
+      this.untrackedTxs++;
+      return;
+    }
+    this.trackedTxs++;
+
+    // Fee rates are stored and reported as BTC-per-kb:
+    const feeRate = new FeeRate(transaction.fee, transaction.size);
+
+    this.mempoolTransactions[hash].blockHeight = height;
+    const bucketIndex = this.feeStats.addTx(height, feeRate.getFeePerK());
+    this.mempoolTransactions[hash].bucketIndex = bucketIndex;
+    this.shortStats.addTx(height, feeRate.getFeePerK());
+    this.longStats.addTx(height, feeRate.getFeePerK());
+  }
+
+  processBlockTx(nBlockHeight, entry) {
+    if (!this.removeTx(entry.hash, true)) {
+      // This transaction wasn't being tracked for fee estimation
+      return false;
+    }
+
+    // How many blocks did it take for miners to include this transaction?
+    // blocksToConfirm is 1-based, so a transaction included in the earliest
+    // possible block has confirmation count of 1
+    const blocksToConfirm = nBlockHeight - entry.height;
+    if (blocksToConfirm <= 0) {
+      // This can't happen because we don't process transactions from a block with a height
+      // lower than our greatest seen height
+      console.warn('Blockpolicy error Transaction had negative blocksToConfirm');
+      return false;
+    }
+
+    // Fee rates are stored and reported as BTC-per-kb:
+    const feeRate = new FeeRate(entry.fee, entry.size);
+
+    this.feeStats.record(blocksToConfirm, feeRate.getFeePerK());
+    this.shortStats.record(blocksToConfirm, feeRate.getFeePerK());
+    this.longStats.record(blocksToConfirm, feeRate.getFeePerK());
+    return true;
+  }
+
+  /**
+   * @param blockHeight
+   * @param transactions - transactions included in block
+   */
+  processBlock(blockHeight, transactions) {
+    if (blockHeight <= this.nBestSeenHeight) {
+      // Ignore side chains and re-orgs; assuming they are random
+      // they don't affect the estimate.
+      // And if an attacker can re-org the chain at will, then
+      // you've got much bigger problems than "attacker can influence
+      // transaction fees."
+      return;
+    }
+
+    // Must update nBestSeenHeight in sync with ClearCurrent so that
+    // calls to removeTx (via processBlockTx) correctly calculate age
+    // of unconfirmed txs to remove from tracking.
+    this.nBestSeenHeight = blockHeight;
+
+    // Update unconfirmed circular buffer
+    this.feeStats.clearCurrent(blockHeight);
+    this.shortStats.clearCurrent(blockHeight);
+    this.longStats.clearCurrent(blockHeight);
+
+    // Decay all exponential averages
+    this.feeStats.updateMovingAverages();
+    this.shortStats.updateMovingAverages();
+    this.longStats.updateMovingAverages();
+
+    let countedTxs = 0;
+    // Update averages with data points from current block
+    transactions.forEach((entry) => {
+      if (this.processBlockTx(blockHeight, entry)) { countedTxs++; }
+    });
+
+    if (this.firstRecordedHeight === 0 && countedTxs > 0) {
+      this.firstRecordedHeight = this.nBestSeenHeight;
+      // todo: Remove later
+      console.info('First recorded height updated');
+    }
+
+    const message = `Blockpolicy estimates updated by ${countedTxs} of ${transactions.length} block txs, 
+      since last block ${this.trackedTxs} of ${this.trackedTxs + this.untrackedTxs} tracked, 
+      mempool map size ${Object.keys(this.mempoolTransactions).length}, 
+      max target ${this.maxUsableEstimate()} from ${this.historicalBlockSpan() > this.blockSpan() ? 'historical' : 'current'}`;
+    // todo: remove
+    console.info(message);
+
+    this.trackedTxs = 0;
+    this.untrackedTxs = 0;
   }
 
   blockSpan() {
