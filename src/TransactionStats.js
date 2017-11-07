@@ -1,23 +1,68 @@
 const EstimatorBucket = require('./EstimatorBucket');
 const EstimationResult = require('./EstimationResult');
 
+/**
+ * We will instantiate an instance of this class to track transactions that were
+ * included in a block. We will lump transactions into a bucket according to their
+ * approximate feerate and then track how long it took for those txs to be included in a block
+ *
+ * The tracking of unconfirmed (mempool) transactions is completely independent of the
+ * historical tracking of transactions that have been confirmed in a block.
+ */
 class TransactionStats {
-  constructor(buckets, bucketMap, blockPeriods, decay, scale) {
-    this.averageTransactionConfirmTimes = [];
-    this.unconfirmedTransactions = [];
-    this.oldUnconfirmedTransactions = [];
-    this.confirmationAverage = [];
-    this.failAverage = [];
-    this.average = [];
+  constructor(buckets, bucketMap, maxPeriods, decay, scale) {
+    if (scale === 0) {
+      throw new Error('scale must non-zero');
+    }
     this.buckets = buckets;
-    this.scale = scale;
-    this.decay = decay;
-    this.blockPeriods = blockPeriods;
     this.bucketMap = bucketMap;
+
+    /**
+     * For each bucket X:
+     * Count the total # of txs in each bucket
+     * Track the historical moving average of this total over blocks
+     * @type {Array<number>}
+     */
+    this.averageTransactionConfirmTimes = [];
+    /**
+     * Count the total # of txs confirmed within Y blocks in each bucket
+     * Track the historical moving average of theses totals over blocks
+     * @type {Array<number>}
+     */
+    this.confirmationAverage = [];
+    /**
+     * Track moving avg of txs which have been evicted from the mempool
+     * after failing to be confirmed within Y blocks
+     * @type {Array<number>}
+     */
+    this.failAverage = [];
+    /**
+     * Sum the total feerate of all tx's in each bucket
+     * Track the historical moving average of this total over blocks
+     * @type {Array<number>}
+     */
+    this.average = [];
+
+    this.decay = decay;
+    this.scale = scale;
+
+    /**
+     * Mempool counts of outstanding transactions
+     * For each bucket X, track the number of transactions in the mempool
+     * that are unconfirmed for each possible confirmation value Y
+     * @type {Array}
+     */
+    this.unconfirmedTransactions = [];
+    /**
+     * Transactions still unconfirmed after GetMaxConfirms for each bucket
+     * @type {Array}
+     */
+    this.oldUnconfirmedTransactions = [];
+
+    this.blockPeriods = maxPeriods;
   }
 
   /**
-   * TODO: make this same way as in bitcoin core
    * Returns the max number of confirms we're tracking
    * @returns {number}
    */
@@ -25,7 +70,6 @@ class TransactionStats {
     return this.scale * this.confirmationAverage.length;
   }
 
-  // buckets is mempool transactions grouped by feerate
   estimateMedianVal(confTarget, sufficientTxVal, successBreakPoint, requireGreater, nBlockHeight) {
     // TODO: big fat todo: is it really should be transaction from mempool or transactions out of mempool or both?
     const {
