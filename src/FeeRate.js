@@ -26,3 +26,5 @@ class FeeRate {
     return nFee;
   }
 }
+
+module.exports = FeeRate;
