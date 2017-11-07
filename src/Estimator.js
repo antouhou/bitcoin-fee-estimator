@@ -20,13 +20,18 @@ const {
   MAX_BUCKET_FEERATE,
   FEE_SPACING,
   INF_FEERATE,
+  OLDEST_ESTIMATE_HISTORY,
   FeeReason,
 } = require('./constants');
 
 class Estimator {
-  constructor() {
+  constructor(nBestSeenHeight = 0, firstRecordedHeight = 0, historicalFirst = 0, historicalBest = 0) {
     this.buckets = [];
     this.bucketMap = {};
+    this.nBestSeenHeight = nBestSeenHeight;
+    this.firstRecordedHeight = firstRecordedHeight;
+    this.historicalFirst = historicalFirst;
+    this.historicalBest = historicalBest;
     // : nBestSeenHeight(0), firstRecordedHeight(0), historicalFirst(0), historicalBest(0), trackedTxs(0), untrackedTxs(0)
     let bucketIndex = 0;
     for (let bucketBoundary = MIN_BUCKET_FEERATE; bucketBoundary <= MAX_BUCKET_FEERATE; bucketBoundary *= FEE_SPACING, bucketIndex++) {
@@ -41,6 +46,32 @@ class Estimator {
     this.longStats = new TransactionStats(this.buckets, this.bucketMap, LONG_BLOCK_PERIODS, LONG_DECAY, LONG_SCALE);
   }
 
+  blockSpan() {
+    if (this.firstRecordedHeight === 0) return 0;
+    if (this.nBestSeenHeight < this.firstRecordedHeight) {
+      throw new Error('First recorded height can not me bigger than last seen height');
+    }
+    return this.nBestSeenHeight - this.firstRecordedHeight;
+  }
+
+  historicalBlockSpan() {
+    if (this.historicalFirst === 0) { return 0; }
+    if (this.historicalBest < this.historicalFirst) {
+      throw new Error('First recorded historical height can not me bigger than last seen historical height');
+    }
+
+    if (this.nBestSeenHeight - this.historicalBest > OLDEST_ESTIMATE_HISTORY) {
+      return 0;
+    }
+
+    return this.historicalBest - this.historicalFirst;
+  }
+
+  maxUsableEstimate() {
+    // Block spans are divided by 2 to make sure there are enough potential failing data points for the estimate
+    return Math.min(this.longStats.getMaxConfirms(), Math.max(this.blockSpan(), this.historicalBlockSpan()) / 2);
+  }
+
   estimateSmartFee(confirmationTarget, feeCalc, isConservative) {
     let target = confirmationTarget;
     const feeCalculation = feeCalc;
@@ -53,6 +84,7 @@ class Estimator {
     let halfEst = -1;
     let actualEst = -1;
     let doubleEst = -1;
+    let consEst = -1;
     let estimationResult = new EstimationResult();
 
     // Return failure if trying to analyze a target we're not tracking
@@ -63,7 +95,7 @@ class Estimator {
     // It's not possible to get reasonable estimates for confTarget of 1
     if (target === 1) { target = 2; }
 
-    const maxUsableEstimate = MaxUsableEstimate();
+    const maxUsableEstimate = this.maxUsableEstimate();
     if (target > maxUsableEstimate) {
       target = maxUsableEstimate;
     }
@@ -104,7 +136,7 @@ class Estimator {
     }
 
     if (isConservative || median === -1) {
-      const consEst = estimateConservativeFee(2 * target, estimationResult);
+      [consEst, estimationResult] = this.estimateConservativeFee(2 * target);
       if (consEst > median) {
         median = consEst;
         if (feeCalculation) {
@@ -131,17 +163,17 @@ class Estimator {
     if (confirmationTarget >= 1 && confirmationTarget <= longStats.getMaxConfirms()) {
       // Find estimate from shortest time horizon possible
       if (confirmationTarget <= shortStats.getMaxConfirms()) { // short horizon
-        [estimate, result] = shortStats.estimateMedianVal(confirmationTarget, SUFFICIENT_TXS_SHORT, successThreshold, true, nBestSeenHeight);
+        [estimate, result] = shortStats.estimateMedianVal(confirmationTarget, SUFFICIENT_TXS_SHORT, successThreshold, true, this.nBestSeenHeight);
       } else if (confirmationTarget <= feeStats.getMaxConfirms()) { // medium horizon
-        [estimate, result] = feeStats.estimateMedianVal(confirmationTarget, SUFFICIENT_FEETXS, successThreshold, true, nBestSeenHeight);
+        [estimate, result] = feeStats.estimateMedianVal(confirmationTarget, SUFFICIENT_FEETXS, successThreshold, true, this.nBestSeenHeight);
       } else { // long horizon
-        [estimate, result] = longStats.estimateMedianVal(confirmationTarget, SUFFICIENT_FEETXS, successThreshold, true, nBestSeenHeight);
+        [estimate, result] = longStats.estimateMedianVal(confirmationTarget, SUFFICIENT_FEETXS, successThreshold, true, this.nBestSeenHeight);
       }
 
       if (checkShorterHorizon) {
         // If a lower confTarget from a more recent horizon returns a lower answer use it.
         if (confirmationTarget > feeStats.getMaxConfirms()) {
-          const [medMax, tempResult] = feeStats.estimateMedianVal(feeStats.getMaxConfirms(), SUFFICIENT_FEETXS, successThreshold, true, nBestSeenHeight);
+          const [medMax, tempResult] = feeStats.estimateMedianVal(feeStats.getMaxConfirms(), SUFFICIENT_FEETXS, successThreshold, true, this.nBestSeenHeight);
           if (medMax > 0 && (estimate === -1 || medMax < estimate)) {
             estimate = medMax;
             if (result) {
@@ -150,7 +182,7 @@ class Estimator {
           }
         }
         if (confirmationTarget > shortStats.getMaxConfirms()) {
-          const [shortMax, tempResult] = shortStats.estimateMedianVal(shortStats.getMaxConfirms(), SUFFICIENT_TXS_SHORT, successThreshold, true, nBestSeenHeight);
+          const [shortMax, tempResult] = shortStats.estimateMedianVal(shortStats.getMaxConfirms(), SUFFICIENT_TXS_SHORT, successThreshold, true, this.nBestSeenHeight);
           if (shortMax > 0 && (estimate === -1 || shortMax < estimate)) {
             estimate = shortMax;
             if (result) {
@@ -158,6 +190,24 @@ class Estimator {
             }
           }
         }
+      }
+    }
+    return [estimate, result];
+  }
+
+  estimateConservativeFee(doubleTarget) {
+    let estimate = -1;
+    let longEstimate = -1;
+    let result = new EstimationResult();
+    let longResult = new EstimationResult();
+    if (doubleTarget <= this.shortStats.getMaxConfirms()) {
+      [estimate, result] = this.feeStats.estimateMedianVal(doubleTarget, SUFFICIENT_FEETXS, DOUBLE_SUCCESS_PCT, true, this.nBestSeenHeight);
+    }
+    if (doubleTarget <= this.feeStats.getMaxConfirms()) {
+      [longEstimate, longResult] = this.longStats.estimateMedianVal(doubleTarget, SUFFICIENT_FEETXS, DOUBLE_SUCCESS_PCT, true, this.nBestSeenHeight);
+      if (longEstimate > estimate) {
+        estimate = longEstimate;
+        result = longResult;
       }
     }
     return [estimate, result];
