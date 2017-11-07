@@ -1,5 +1,6 @@
 const TransactionStats = require('./TransactionStats');
 const EstimationResult = require('./EstimationResult');
+const FeeRate = require('./FeeRate');
 const {
   SHORT_BLOCK_PERIODS,
   SHORT_SCALE,
@@ -56,7 +57,7 @@ class Estimator {
 
     // Return failure if trying to analyze a target we're not tracking
     if (target <= 0 || target > this.longStats.getMaxConfirms()) {
-      return CFeeRate(0); // error condition
+      return new FeeRate(0); // error condition
     }
 
     // It's not possible to get reasonable estimates for confTarget of 1
@@ -68,7 +69,7 @@ class Estimator {
     }
     if (feeCalculation) feeCalculation.returnedTarget = target;
 
-    if (target <= 1) return CFeeRate(0); // error condition
+    if (target <= 1) return new FeeRate(0); // error condition
     /** true is passed to estimateCombined fee for target/2 and target so
      * that we check the max confirms for shorter time horizons as well.
      * This is necessary to preserve monotonically increasing estimates.
@@ -113,9 +114,9 @@ class Estimator {
       }
     }
 
-    if (median < 0) return CFeeRate(0); // error condition
+    if (median < 0) return new FeeRate(0); // error condition
 
-    return CFeeRate(median);
+    return new FeeRate(median);
   }
 
   /** Return a fee estimate at the required successThreshold from the shortest
