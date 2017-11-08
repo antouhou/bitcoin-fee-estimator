@@ -1,6 +1,6 @@
 const TransactionStats = require('./TransactionStats');
 const FeeRate = require('./FeeRate');
-const { EstimationResult, MempoolTransaction } = require('./dataStructures');
+const { EstimationResult, MempoolTransaction, FeeCalculation } = require('./dataStructures');
 const {
   SHORT_BLOCK_PERIODS,
   SHORT_SCALE,
@@ -25,10 +25,10 @@ const {
 } = require('./constants');
 
 class Estimator {
-  constructor(nBestSeenHeight = 0, firstRecordedHeight = 0, historicalFirst = 0, historicalBest = 0, trackedTxs = 0, untrackedTxs = 0) {
+  constructor(bestSeenHeight = 0, firstRecordedHeight = 0, historicalFirst = 0, historicalBest = 0, trackedTxs = 0, untrackedTxs = 0) {
     this.buckets = [];
     this.bucketMap = new Map();
-    this.nBestSeenHeight = nBestSeenHeight;
+    this.bestSeenHeight = bestSeenHeight;
     this.firstRecordedHeight = firstRecordedHeight;
     this.historicalFirst = historicalFirst;
     this.historicalBest = historicalBest;
@@ -54,28 +54,39 @@ class Estimator {
     const isLastAdded = lastAddedTransactionHash === hash;
     // todo: Why should it give any sense?
     if (!isLastAdded) {
-      this.feeStats.removeTx(transaction.blockHeight, this.nBestSeenHeight, transaction.bucketIndex, inBlock);
-      this.shortStats.removeTx(transaction.blockHeight, this.nBestSeenHeight, transaction.bucketIndex, inBlock);
-      this.longStats.removeTx(transaction.blockHeight, this.nBestSeenHeight, transaction.bucketIndex, inBlock);
+      this.feeStats.removeTx(transaction.blockHeight, this.bestSeenHeight, transaction.bucketIndex, inBlock);
+      this.shortStats.removeTx(transaction.blockHeight, this.bestSeenHeight, transaction.bucketIndex, inBlock);
+      this.longStats.removeTx(transaction.blockHeight, this.bestSeenHeight, transaction.bucketIndex, inBlock);
       this.mempoolTransactions.delete(hash);
       return true;
     }
     return false;
   }
 
+  addTransactionsToMempool(rawMempoolTransactions) {
+    const txids = Object.keys(rawMempoolTransactions);
+    txids.forEach((hash) => {
+      const transaction = rawMempoolTransactions[hash];
+      transaction.hash = hash;
+      // todo: remove true, add fee validation
+      this.addTransactionToMempool(transaction, true);
+    });
+  }
+
   /**
-   *
+   * Adds transaction to mempool.
+   * Notice: It is important to process blocks before adding new mempool transactions
    * @param transaction mempoolTransactionEntry
-   * @param validFeeEstimate
+   * @param isValidFeeEstimate
    */
-  processTransaction(transaction, validFeeEstimate) {
+  addTransactionToMempool(transaction, isValidFeeEstimate) {
     // todo: need to extract hash first
     const { hash, height } = transaction;
     if (this.mempoolTransactions.has(hash)) {
       return;
     }
 
-    if (height !== this.nBestSeenHeight) {
+    if (height !== this.bestSeenHeight) {
       // Ignore side chains and re-orgs; assuming they are random they don't
       // affect the estimate.  We'll potentially double count transactions in 1-block reorgs.
       // Ignore txs if Estimator is not in sync with chainActive.Tip().
@@ -85,7 +96,7 @@ class Estimator {
 
     // Only want to be updating estimates when our blockchain is synced,
     // otherwise we'll miscalculate how many blocks its taking to get included.
-    if (!validFeeEstimate) {
+    if (!isValidFeeEstimate) {
       this.untrackedTxs++;
       return;
     }
@@ -100,7 +111,7 @@ class Estimator {
     this.mempoolTransactions.set(hash, new MempoolTransaction(transaction, bucketIndex));
   }
 
-  processBlockTx(nBlockHeight, entry) {
+  processBlockTx(blockHeight, entry) {
     if (!this.removeTx(entry.hash, true)) {
       // This transaction wasn't being tracked for fee estimation
       return false;
@@ -109,7 +120,7 @@ class Estimator {
     // How many blocks did it take for miners to include this transaction?
     // blocksToConfirm is 1-based, so a transaction included in the earliest
     // possible block has confirmation count of 1
-    const blocksToConfirm = nBlockHeight - entry.height;
+    const blocksToConfirm = blockHeight - entry.height;
     if (blocksToConfirm <= 0) {
       // This can't happen because we don't process transactions from a block with a height
       // lower than our greatest seen height
@@ -128,10 +139,10 @@ class Estimator {
 
   /**
    * @param blockHeight
-   * @param transactions - transactions included in block
+   * @param txids - transactions included in block
    */
-  processBlock(blockHeight, transactions) {
-    if (blockHeight <= this.nBestSeenHeight) {
+  processBlock(blockHeight, txids) {
+    if (blockHeight <= this.bestSeenHeight) {
       // Ignore side chains and re-orgs; assuming they are random
       // they don't affect the estimate.
       // And if an attacker can re-org the chain at will, then
@@ -140,10 +151,10 @@ class Estimator {
       return;
     }
 
-    // Must update nBestSeenHeight in sync with ClearCurrent so that
+    // Must update bestSeenHeight in sync with ClearCurrent so that
     // calls to removeTx (via processBlockTx) correctly calculate age
     // of unconfirmed txs to remove from tracking.
-    this.nBestSeenHeight = blockHeight;
+    this.bestSeenHeight = blockHeight;
 
     // Update unconfirmed circular buffer
     this.feeStats.clearCurrent(blockHeight);
@@ -157,17 +168,20 @@ class Estimator {
 
     let countedTxs = 0;
     // Update averages with data points from current block
-    transactions.forEach((entry) => {
-      if (this.processBlockTx(blockHeight, entry)) { countedTxs++; }
+    txids.forEach((txid) => {
+      if (this.mempoolTransactions.has(txid)) {
+        const transaction = this.mempoolTransactions.get(txid);
+        if (this.processBlockTx(blockHeight, transaction)) { countedTxs++; }
+      }
     });
 
     if (this.firstRecordedHeight === 0 && countedTxs > 0) {
-      this.firstRecordedHeight = this.nBestSeenHeight;
+      this.firstRecordedHeight = this.bestSeenHeight;
       // todo: Remove later
       console.info('First recorded height updated');
     }
 
-    const message = `Blockpolicy estimates updated by ${countedTxs} of ${transactions.length} block txs, 
+    const message = `Blockpolicy estimates updated by ${countedTxs} of ${txids.length} block txs, 
       since last block ${this.trackedTxs} of ${this.trackedTxs + this.untrackedTxs} tracked, 
       mempool map size ${this.mempoolTransactions.size}, 
       max target ${this.maxUsableEstimate()} from ${this.historicalBlockSpan() > this.blockSpan() ? 'historical' : 'current'}`;
@@ -180,10 +194,10 @@ class Estimator {
 
   blockSpan() {
     if (this.firstRecordedHeight === 0) return 0;
-    if (this.nBestSeenHeight < this.firstRecordedHeight) {
+    if (this.bestSeenHeight < this.firstRecordedHeight) {
       throw new Error('First recorded height can not me bigger than last seen height');
     }
-    return this.nBestSeenHeight - this.firstRecordedHeight;
+    return this.bestSeenHeight - this.firstRecordedHeight;
   }
 
   historicalBlockSpan() {
@@ -192,7 +206,7 @@ class Estimator {
       throw new Error('First recorded historical height can not me bigger than last seen historical height');
     }
 
-    if (this.nBestSeenHeight - this.historicalBest > OLDEST_ESTIMATE_HISTORY) {
+    if (this.bestSeenHeight - this.historicalBest > OLDEST_ESTIMATE_HISTORY) {
       return 0;
     }
 
@@ -204,9 +218,9 @@ class Estimator {
     return Math.min(this.longStats.getMaxConfirms(), Math.max(this.blockSpan(), this.historicalBlockSpan()) / 2);
   }
 
-  estimateSmartFee(confirmationTarget, feeCalc, isConservative) {
+  estimateSmartFee(confirmationTarget, isConservative = false) {
     let target = confirmationTarget;
-    const feeCalculation = feeCalc;
+    const feeCalculation = new FeeCalculation();
     if (feeCalculation) {
       feeCalculation.desiredTarget = target;
       feeCalculation.returnedTarget = target;
@@ -221,7 +235,7 @@ class Estimator {
 
     // Return failure if trying to analyze a target we're not tracking
     if (target <= 0 || target > this.longStats.getMaxConfirms()) {
-      return new FeeRate(0); // error condition
+      return new FeeRate(0);
     }
 
     // It's not possible to get reasonable estimates for confTarget of 1
@@ -295,17 +309,17 @@ class Estimator {
     if (confirmationTarget >= 1 && confirmationTarget <= longStats.getMaxConfirms()) {
       // Find estimate from shortest time horizon possible
       if (confirmationTarget <= shortStats.getMaxConfirms()) { // short horizon
-        [estimate, result] = shortStats.estimateMedianVal(confirmationTarget, SUFFICIENT_TXS_SHORT, successThreshold, true, this.nBestSeenHeight);
+        [estimate, result] = shortStats.estimateMedianVal(confirmationTarget, SUFFICIENT_TXS_SHORT, successThreshold, true, this.bestSeenHeight);
       } else if (confirmationTarget <= feeStats.getMaxConfirms()) { // medium horizon
-        [estimate, result] = feeStats.estimateMedianVal(confirmationTarget, SUFFICIENT_FEETXS, successThreshold, true, this.nBestSeenHeight);
+        [estimate, result] = feeStats.estimateMedianVal(confirmationTarget, SUFFICIENT_FEETXS, successThreshold, true, this.bestSeenHeight);
       } else { // long horizon
-        [estimate, result] = longStats.estimateMedianVal(confirmationTarget, SUFFICIENT_FEETXS, successThreshold, true, this.nBestSeenHeight);
+        [estimate, result] = longStats.estimateMedianVal(confirmationTarget, SUFFICIENT_FEETXS, successThreshold, true, this.bestSeenHeight);
       }
 
       if (checkShorterHorizon) {
         // If a lower confTarget from a more recent horizon returns a lower answer use it.
         if (confirmationTarget > feeStats.getMaxConfirms()) {
-          const [medMax, tempResult] = feeStats.estimateMedianVal(feeStats.getMaxConfirms(), SUFFICIENT_FEETXS, successThreshold, true, this.nBestSeenHeight);
+          const [medMax, tempResult] = feeStats.estimateMedianVal(feeStats.getMaxConfirms(), SUFFICIENT_FEETXS, successThreshold, true, this.bestSeenHeight);
           if (medMax > 0 && (estimate === -1 || medMax < estimate)) {
             estimate = medMax;
             if (result) {
@@ -314,7 +328,7 @@ class Estimator {
           }
         }
         if (confirmationTarget > shortStats.getMaxConfirms()) {
-          const [shortMax, tempResult] = shortStats.estimateMedianVal(shortStats.getMaxConfirms(), SUFFICIENT_TXS_SHORT, successThreshold, true, this.nBestSeenHeight);
+          const [shortMax, tempResult] = shortStats.estimateMedianVal(shortStats.getMaxConfirms(), SUFFICIENT_TXS_SHORT, successThreshold, true, this.bestSeenHeight);
           if (shortMax > 0 && (estimate === -1 || shortMax < estimate)) {
             estimate = shortMax;
             if (result) {
@@ -333,10 +347,10 @@ class Estimator {
     let result = new EstimationResult();
     let longResult = new EstimationResult();
     if (doubleTarget <= this.shortStats.getMaxConfirms()) {
-      [estimate, result] = this.feeStats.estimateMedianVal(doubleTarget, SUFFICIENT_FEETXS, DOUBLE_SUCCESS_PCT, true, this.nBestSeenHeight);
+      [estimate, result] = this.feeStats.estimateMedianVal(doubleTarget, SUFFICIENT_FEETXS, DOUBLE_SUCCESS_PCT, true, this.bestSeenHeight);
     }
     if (doubleTarget <= this.feeStats.getMaxConfirms()) {
-      [longEstimate, longResult] = this.longStats.estimateMedianVal(doubleTarget, SUFFICIENT_FEETXS, DOUBLE_SUCCESS_PCT, true, this.nBestSeenHeight);
+      [longEstimate, longResult] = this.longStats.estimateMedianVal(doubleTarget, SUFFICIENT_FEETXS, DOUBLE_SUCCESS_PCT, true, this.bestSeenHeight);
       if (longEstimate > estimate) {
         estimate = longEstimate;
         result = longResult;

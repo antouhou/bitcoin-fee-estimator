@@ -9,6 +9,13 @@ const { lowerBound } = require('./utils');
  * historical tracking of transactions that have been confirmed in a block.
  */
 class TransactionStats {
+  /**
+   * @param {Array<number>} buckets
+   * @param {Map} bucketMap
+   * @param {number} maxPeriods
+   * @param {number} decay
+   * @param {number} scale
+   */
   constructor(buckets, bucketMap, maxPeriods, decay, scale) {
     if (scale === 0) {
       throw new Error('scale must non-zero');
@@ -17,7 +24,7 @@ class TransactionStats {
     this.bucketMap = bucketMap;
     this.decay = decay;
     this.scale = scale;
-    this.blockPeriods = maxPeriods;
+    this.maxPeriods = maxPeriods;
 
     /**
      * For each bucket X:
@@ -25,38 +32,38 @@ class TransactionStats {
      * Track the historical moving average of this total over blocks
      * @type {Array<number>}
      */
-    this.averageTransactionConfirmTimes = [];
+    this.averageTransactionConfirmTimes = new Array(this.buckets.length).fill(0);
     /**
      * Count the total # of txs confirmed within Y blocks in each bucket
      * Track the historical moving average of theses totals over blocks
      * @type {Array<number>}
      */
-    this.confirmationAverage = [];
+    this.confirmationAverage = new Array(this.maxPeriods).fill(new Array(this.buckets.length).fill(0));
     /**
      * Track moving avg of txs which have been evicted from the mempool
      * after failing to be confirmed within Y blocks
      * @type {Array<number>}
      */
-    this.failAverage = [];
+    this.failAverage = new Array(this.maxPeriods).fill(new Array(this.buckets.length).fill(0));
     /**
      * Sum the total feerate of all tx's in each bucket
      * Track the historical moving average of this total over blocks
      * @type {Array<number>}
      */
-    this.average = [];
+    this.average = new Array(this.buckets.length).fill(0);
     /**
      * Mempool counts of outstanding transactions
      * For each bucket X, track the number of transactions in the mempool
      * that are unconfirmed for each possible confirmation value Y
      * @type {Array<number>}
      */
-    this.unconfirmedTransactions = [];
+    this.unconfirmedTransactions = new Array(this.getMaxConfirms()).fill(new Array(this.buckets.length).fill(0));
     /**
      * Transactions count still unconfirmed after GetMaxConfirms for each bucket.
      * So array index is bucket index, and value is transactions count.
      * @type {Array<number>}
      */
-    this.oldUnconfirmedTransactions = [];
+    this.oldUnconfirmedTransactions = new Array(this.buckets.length).fill(0);
   }
 
   clearCurrent(blockHeight) {
@@ -66,12 +73,23 @@ class TransactionStats {
     }
   }
 
+  getClosestBucketIndex(feeInSatoshis) {
+    const closestBucket = lowerBound(this.bucketMap.keys(), feeInSatoshis);
+    const closestBucketKey = Array.from(this.bucketMap.keys())[closestBucket];
+    return this.bucketMap.get(closestBucketKey);
+  }
+
+  /**
+   *
+   * @param blocksToConfirm
+   * @param val - fee in satoshis
+   */
   record(blocksToConfirm, val) {
+    // Todo: danger! val in btc, buckets in satoshis!
     // blocksToConfirm is 1-based
     if (blocksToConfirm < 1) { return; }
     const periodsToConfirm = ((blocksToConfirm + this.scale) - 1) / this.scale;
-    const closestBucket = lowerBound(this.bucketMap.keys(), val);
-    const bucketIndex = this.bucketMap.get(closestBucket);
+    const bucketIndex = this.getClosestBucketIndex(val);
     for (let i = periodsToConfirm; i <= this.confirmationAverage.length; i++) {
       this.confirmationAverage[i - 1][bucketIndex]++;
     }
@@ -92,19 +110,23 @@ class TransactionStats {
     }
   }
 
-  addTx(blockHeight, val) {
-    const closestBucket = lowerBound(this.bucketMap.keys(), val);
-    const bucketIndex = this.bucketMap.get(closestBucket);
+  /**
+   * @param blockHeight
+   * @param feePerKInSatoshis
+   * @returns {V}
+   */
+  addTx(blockHeight, feePerKInSatoshis) {
+    const bucketIndex = this.getClosestBucketIndex(feePerKInSatoshis);
     const blockIndex = blockHeight % this.unconfirmedTransactions.length;
     this.unconfirmedTransactions[blockIndex][bucketIndex]++;
     return bucketIndex;
   }
 
-  removeTx(entryHeight, nBestSeenHeight, bucketIndex, inBlock) {
-    // nBestSeenHeight is not updated yet for the new block
-    let blocksAgo = nBestSeenHeight - entryHeight;
+  removeTx(transactionHeight, bestSeenHeight, bucketIndex, inBlock) {
+    // bestSeenHeight is not updated yet for the new block
+    let blocksAgo = bestSeenHeight - transactionHeight;
     // the Estimator hasn't seen any blocks yet
-    if (nBestSeenHeight === 0) {
+    if (bestSeenHeight === 0) {
       blocksAgo = 0;
     }
     if (blocksAgo < 0) {
@@ -118,10 +140,11 @@ class TransactionStats {
         throw new Error(`Blockpolicy error, mempool tx removed from >25 blocks,bucketIndex=${bucketIndex} already`);
       }
     } else {
-      const blockIndex = entryHeight % this.unconfirmedTransactions.length;
+      const blockIndex = transactionHeight % this.unconfirmedTransactions.length;
       if (this.unconfirmedTransactions[blockIndex][bucketIndex] > 0) {
         this.unconfirmedTransactions[blockIndex][bucketIndex]--;
       } else {
+        // todo: why we in this branch in tests?
         throw new Error(`Blockpolicy error, mempool tx removed from blockIndex=${blockIndex},bucketIndex=${bucketIndex} already`);
       }
     }

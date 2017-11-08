@@ -1,13 +1,18 @@
+// One hundred millions
+const satoshisInBtc = 100000000;
+
 class FeeRate {
-  constructor(nFeePaid, transactionSizeInBytes) {
+  constructor(feePaidInBtc, transactionSizeInBytes) {
     if (transactionSizeInBytes > Math.MAX_SAFE_INTEGER) {
       throw new Error('Transaction size is too big');
     }
 
     if (transactionSizeInBytes > 0) {
-      this.nSatoshisPerK = (nFeePaid * 1000) / transactionSizeInBytes;
+      const btcPerByte = feePaidInBtc / transactionSizeInBytes;
+      const btcPerK = btcPerByte * 1000;
+      this.satoshisPerK = btcPerK * satoshisInBtc;
     } else {
-      this.nSatoshisPerK = 0;
+      this.satoshisPerK = 0;
     }
   }
 
@@ -16,14 +21,14 @@ class FeeRate {
       throw new Error('Transaction size is too big');
     }
 
-    let nFee = (this.nSatoshisPerK * transactionSizeInBytes) / 1000;
+    let feeInSatoshis = (this.satoshisPerK * transactionSizeInBytes) / 1000;
 
-    if (nFee === 0 && transactionSizeInBytes !== 0) {
-      if (this.nSatoshisPerK > 0) { nFee = 1; }
-      if (this.nSatoshisPerK < 0) { nFee = -1; }
+    if (feeInSatoshis === 0 && transactionSizeInBytes !== 0) {
+      if (this.satoshisPerK > 0) { feeInSatoshis = 1; }
+      if (this.satoshisPerK < 0) { feeInSatoshis = -1; }
     }
 
-    return nFee;
+    return parseInt(feeInSatoshis, 10);
   }
 
   getFeePerK() {

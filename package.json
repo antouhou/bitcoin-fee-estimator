@@ -5,6 +5,7 @@
   "main": "index.js",
   "scripts": {
     "test": "node_modules/.bin/mocha test/",
+    "coverage": "node_modules/.bin/nyc node_modules/.bin/mocha test/",
     "eslint": "node_modules/.bin/eslint src/",
     "build": "npm test && npm run eslint"
   },
@@ -24,6 +25,7 @@
     "eslint": "4.10.0",
     "eslint-config-airbnb-base": "12.1.0",
     "eslint-plugin-import": "2.8.0",
-    "mocha": "4.0.1"
+    "mocha": "4.0.1",
+    "nyc": "^11.3.0"
   }
 }
