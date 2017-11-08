@@ -2,7 +2,7 @@ const { expect } = require('chai');
 const { lowerBound } = require('../src/utils');
 
 describe('utils', () => {
-  describe('lowerBound', () => {
+  describe('.lowerBound()', () => {
     it('should find closest element in array to a given, when value not in array', () => {
       const x = 8;
       const array = [5, 10, 15, 9, 20, 25, 30, 35];
