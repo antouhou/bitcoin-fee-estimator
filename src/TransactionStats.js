@@ -1,5 +1,5 @@
 const { EstimatorBucket, EstimationResult } = require('./dataStructures');
-
+const { lowerBound } = require('./utils');
 /**
  * We will instantiate an instance of this class to track transactions that were
  * included in a block. We will lump transactions into a bucket according to their
@@ -70,9 +70,8 @@ class TransactionStats {
     // blocksToConfirm is 1-based
     if (blocksToConfirm < 1) { return; }
     const periodsToConfirm = ((blocksToConfirm + this.scale) - 1) / this.scale;
-    // todo: js do not have implementation of map.lower_bound. Research needed
-    // Actually bucketMap keys is array of numbers, so it should be easy to implement
-    const bucketIndex = this.bucketMap.lower_bound(val).second;
+    const closestBucket = lowerBound(this.bucketMap.keys(), val);
+    const bucketIndex = this.bucketMap.get(closestBucket);
     for (let i = periodsToConfirm; i <= this.confirmationAverage.length; i++) {
       this.confirmationAverage[i - 1][bucketIndex]++;
     }
@@ -94,8 +93,8 @@ class TransactionStats {
   }
 
   addTx(blockHeight, val) {
-    // todo: what is that?
-    const bucketIndex = this.bucketMap.lower_bound(val).second;
+    const closestBucket = lowerBound(this.bucketMap.keys(), val);
+    const bucketIndex = this.bucketMap.get(closestBucket);
     const blockIndex = blockHeight % this.unconfirmedTransactions.length;
     this.unconfirmedTransactions[blockIndex][bucketIndex]++;
     return bucketIndex;

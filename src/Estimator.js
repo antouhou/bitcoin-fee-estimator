@@ -27,20 +27,19 @@ const {
 class Estimator {
   constructor(nBestSeenHeight = 0, firstRecordedHeight = 0, historicalFirst = 0, historicalBest = 0, trackedTxs = 0, untrackedTxs = 0) {
     this.buckets = [];
-    this.bucketMap = {};
+    this.bucketMap = new Map();
     this.nBestSeenHeight = nBestSeenHeight;
     this.firstRecordedHeight = firstRecordedHeight;
     this.historicalFirst = historicalFirst;
     this.historicalBest = historicalBest;
     this.trackedTxs = trackedTxs;
     this.untrackedTxs = untrackedTxs;
-    let bucketIndex = 0;
-    for (let bucketBoundary = MIN_BUCKET_FEERATE; bucketBoundary <= MAX_BUCKET_FEERATE; bucketBoundary *= FEE_SPACING, bucketIndex++) {
-      this.buckets.push(bucketBoundary);
-      this.bucketMap[bucketBoundary] = bucketIndex;
+    for (let bucketBoundary = MIN_BUCKET_FEERATE; bucketBoundary <= MAX_BUCKET_FEERATE; bucketBoundary *= FEE_SPACING) {
+      const bucketIndex = this.buckets.push(bucketBoundary) - 1;
+      this.bucketMap.set(bucketBoundary, bucketIndex);
     }
-    this.buckets.push(INF_FEERATE);
-    this.bucketMap[INF_FEERATE] = bucketIndex;
+    const bucketIndex = this.buckets.push(INF_FEERATE) - 1;
+    this.bucketMap.set(INF_FEERATE, bucketIndex);
 
     this.feeStats = new TransactionStats(this.buckets, this.bucketMap, MED_BLOCK_PERIODS, MED_DECAY, MED_SCALE);
     this.shortStats = new TransactionStats(this.buckets, this.bucketMap, SHORT_BLOCK_PERIODS, SHORT_DECAY, SHORT_SCALE);
@@ -51,7 +50,7 @@ class Estimator {
 
   removeTx(hash, inBlock) {
     const transaction = this.mempoolTransactions.get(hash);
-    const lastAddedTransactionHash = this.mempoolTransactions.keys()[this.mempoolTransactions.keys() - 1];
+    const lastAddedTransactionHash = Array.from(this.mempoolTransactions.keys())[this.mempoolTransactions.size - 1];
     const isLastAdded = lastAddedTransactionHash === hash;
     // todo: Why should it give any sense?
     if (!isLastAdded) {

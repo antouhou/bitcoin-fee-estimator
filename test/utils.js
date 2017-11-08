@@ -25,5 +25,17 @@ describe('utils', () => {
       const boundIndex = lowerBound(array, 20);
       expect(boundIndex).to.be.equal(3);
     });
+    it('should return correct result on any iterable', () => {
+      const map = new Map();
+      map.set(1, 'foo');
+      map.set(3, 'bar');
+      map.set(5, 'baz');
+      const boundIndex = lowerBound(map.keys(), 4);
+      expect(boundIndex).to.be.equal(1);
+      const boundKey = Array.from(map.keys())[boundIndex];
+      expect(boundKey).to.be.equal(3);
+      const boundValue = map.get(boundKey);
+      expect(boundValue).to.be.equal('bar');
+    });
   });
 });
