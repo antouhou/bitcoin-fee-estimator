@@ -1,6 +1,6 @@
 const TransactionStats = require('./TransactionStats');
-const EstimationResult = require('./EstimationResult');
 const FeeRate = require('./FeeRate');
+const { EstimationResult, MempoolTransaction } = require('./dataStructures');
 const {
   SHORT_BLOCK_PERIODS,
   SHORT_SCALE,
@@ -46,22 +46,19 @@ class Estimator {
     this.shortStats = new TransactionStats(this.buckets, this.bucketMap, SHORT_BLOCK_PERIODS, SHORT_DECAY, SHORT_SCALE);
     this.longStats = new TransactionStats(this.buckets, this.bucketMap, LONG_BLOCK_PERIODS, LONG_DECAY, LONG_SCALE);
 
-    this.mempoolTransactions = {};
-  }
-
-  isTransactionAlreadyTracked(hash) {
-    return Object.keys(this.mempoolTransactions).indexOf(hash) > -1;
+    this.mempoolTransactions = new Map();
   }
 
   removeTx(hash, inBlock) {
-    const pos = Object.keys(this.mempoolTransactions).findIndex(hash);
-    const lastPosition = Object.keys(this.mempoolTransactions).length - 1;
+    const transaction = this.mempoolTransactions.get(hash);
+    const lastAddedTransactionHash = this.mempoolTransactions.keys()[this.mempoolTransactions.keys() - 1];
+    const isLastAdded = lastAddedTransactionHash === hash;
     // todo: Why should it give any sense?
-    if (pos !== lastPosition) {
-      this.feeStats.removeTx(pos.second.blockHeight, this.nBestSeenHeight, pos.second.bucketIndex, inBlock);
-      this.shortStats.removeTx(pos.second.blockHeight, this.nBestSeenHeight, pos.second.bucketIndex, inBlock);
-      this.longStats.removeTx(pos.second.blockHeight, this.nBestSeenHeight, pos.second.bucketIndex, inBlock);
-      delete this.mempoolTransactions[hash];
+    if (!isLastAdded) {
+      this.feeStats.removeTx(transaction.blockHeight, this.nBestSeenHeight, transaction.bucketIndex, inBlock);
+      this.shortStats.removeTx(transaction.blockHeight, this.nBestSeenHeight, transaction.bucketIndex, inBlock);
+      this.longStats.removeTx(transaction.blockHeight, this.nBestSeenHeight, transaction.bucketIndex, inBlock);
+      this.mempoolTransactions.delete(hash);
       return true;
     }
     return false;
@@ -75,7 +72,7 @@ class Estimator {
   processTransaction(transaction, validFeeEstimate) {
     // todo: need to extract hash first
     const { hash, height } = transaction;
-    if (this.isTransactionAlreadyTracked(hash)) {
+    if (this.mempoolTransactions.has(hash)) {
       return;
     }
 
@@ -98,11 +95,10 @@ class Estimator {
     // Fee rates are stored and reported as BTC-per-kb:
     const feeRate = new FeeRate(transaction.fee, transaction.size);
 
-    this.mempoolTransactions[hash].blockHeight = height;
     const bucketIndex = this.feeStats.addTx(height, feeRate.getFeePerK());
-    this.mempoolTransactions[hash].bucketIndex = bucketIndex;
     this.shortStats.addTx(height, feeRate.getFeePerK());
     this.longStats.addTx(height, feeRate.getFeePerK());
+    this.mempoolTransactions.set(hash, new MempoolTransaction(transaction, bucketIndex));
   }
 
   processBlockTx(nBlockHeight, entry) {
@@ -174,7 +170,7 @@ class Estimator {
 
     const message = `Blockpolicy estimates updated by ${countedTxs} of ${transactions.length} block txs, 
       since last block ${this.trackedTxs} of ${this.trackedTxs + this.untrackedTxs} tracked, 
-      mempool map size ${Object.keys(this.mempoolTransactions).length}, 
+      mempool map size ${this.mempoolTransactions.size}, 
       max target ${this.maxUsableEstimate()} from ${this.historicalBlockSpan() > this.blockSpan() ? 'historical' : 'current'}`;
     // todo: remove
     console.info(message);

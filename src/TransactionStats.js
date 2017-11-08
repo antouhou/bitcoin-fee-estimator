@@ -1,5 +1,4 @@
-const EstimatorBucket = require('./EstimatorBucket');
-const EstimationResult = require('./EstimationResult');
+const { EstimatorBucket, EstimationResult } = require('./dataStructures');
 
 /**
  * We will instantiate an instance of this class to track transactions that were
@@ -16,6 +15,9 @@ class TransactionStats {
     }
     this.buckets = buckets;
     this.bucketMap = bucketMap;
+    this.decay = decay;
+    this.scale = scale;
+    this.blockPeriods = maxPeriods;
 
     /**
      * For each bucket X:
@@ -42,24 +44,19 @@ class TransactionStats {
      * @type {Array<number>}
      */
     this.average = [];
-
-    this.decay = decay;
-    this.scale = scale;
-
     /**
      * Mempool counts of outstanding transactions
      * For each bucket X, track the number of transactions in the mempool
      * that are unconfirmed for each possible confirmation value Y
-     * @type {Array}
+     * @type {Array<number>}
      */
     this.unconfirmedTransactions = [];
     /**
-     * Transactions still unconfirmed after GetMaxConfirms for each bucket
-     * @type {Array}
+     * Transactions count still unconfirmed after GetMaxConfirms for each bucket.
+     * So array index is bucket index, and value is transactions count.
+     * @type {Array<number>}
      */
     this.oldUnconfirmedTransactions = [];
-
-    this.blockPeriods = maxPeriods;
   }
 
   clearCurrent(blockHeight) {
@@ -119,14 +116,14 @@ class TransactionStats {
       if (this.oldUnconfirmedTransactions[bucketIndex] > 0) {
         this.oldUnconfirmedTransactions[bucketIndex]--;
       } else {
-        throw new Error(`Blockpolicy error, mempool tx removed from >25 blocks,bucketIndex=%u already ${bucketIndex}`);
+        throw new Error(`Blockpolicy error, mempool tx removed from >25 blocks,bucketIndex=${bucketIndex} already`);
       }
     } else {
       const blockIndex = entryHeight % this.unconfirmedTransactions.length;
       if (this.unconfirmedTransactions[blockIndex][bucketIndex] > 0) {
         this.unconfirmedTransactions[blockIndex][bucketIndex]--;
       } else {
-        throw new Error(`Blockpolicy error, mempool tx removed from blockIndex=%u,bucketIndex=%u already ${blockIndex} ${bucketIndex}`);
+        throw new Error(`Blockpolicy error, mempool tx removed from blockIndex=${blockIndex},bucketIndex=${bucketIndex} already`);
       }
     }
     // Only counts as a failure if not confirmed for entire period
@@ -146,7 +143,6 @@ class TransactionStats {
   }
 
   estimateMedianVal(confTarget, sufficientTxVal, successBreakPoint, requireGreater, nBlockHeight) {
-    // TODO: big fat todo: is it really should be transaction from mempool or transactions out of mempool or both?
     const {
       unconfirmedTransactions,
       oldUnconfirmedTransactions,
