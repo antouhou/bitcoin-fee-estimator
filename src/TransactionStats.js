@@ -30,7 +30,7 @@ class TransactionStats {
      * Track the historical moving average of this total over blocks
      * @type {Array<number>}
      */
-    this.averageTransactionConfirmTimes = new Array(this.buckets.length).fill(0);
+    this.averageTransactionConfirmationTarget = new Array(this.buckets.length).fill(0);
     /**
      * Count the total # of txs confirmed within Y blocks in each bucket
      * Track the historical moving average of theses totals over blocks
@@ -81,12 +81,12 @@ class TransactionStats {
     // Todo: danger! val in btc, buckets in satoshis!
     // blocksToConfirm is 1-based
     if (blocksToConfirm < 1) { return; }
-    const periodsToConfirm = ((blocksToConfirm + this.scale) - 1) / this.scale;
+    const periodsToConfirm = parseInt(((blocksToConfirm + this.scale) - 1) / this.scale, 10);
     const bucketIndex = lowerBound(this.buckets, val);
     for (let i = periodsToConfirm; i <= this.confirmationAverage.length; i++) {
       this.confirmationAverage[i - 1][bucketIndex]++;
     }
-    this.averageTransactionConfirmTimes[bucketIndex]++;
+    this.averageTransactionConfirmationTarget[bucketIndex]++;
     this.average[bucketIndex] += val;
   }
 
@@ -99,7 +99,7 @@ class TransactionStats {
         this.failAverage[i][j] = this.failAverage[i][j] * this.decay;
       }
       this.average[j] = this.average[j] * this.decay;
-      this.averageTransactionConfirmTimes[j] = this.averageTransactionConfirmTimes[j] * this.decay;
+      this.averageTransactionConfirmationTarget[j] = this.averageTransactionConfirmationTarget[j] * this.decay;
     }
   }
 
@@ -131,7 +131,7 @@ class TransactionStats {
       if (this.oldUnconfirmedTransactions[bucketIndex] > 0) {
         this.oldUnconfirmedTransactions[bucketIndex]--;
       } else {
-        throw new Error(`Blockpolicy error, mempool tx removed from >25 blocks,bucketIndex=${bucketIndex} already`);
+        console.log(`Mempool tx removed from > ${blocksAgo} blocks, bucketIndex = ${bucketIndex} already`);
       }
     } else {
       const blockIndex = transactionHeight % this.unconfirmedTransactions.length;
@@ -144,7 +144,7 @@ class TransactionStats {
     }
     // Only counts as a failure if not confirmed for entire period
     if (!inBlock && blocksAgo >= this.scale) {
-      const periodsAgo = blocksAgo / this.scale;
+      const periodsAgo = parseInt(blocksAgo / this.scale, 10);
       for (let i = 0; i < periodsAgo && i < this.failAverage.length; i++) {
         this.failAverage[i][bucketIndex]++;
       }
@@ -158,32 +158,41 @@ class TransactionStats {
     return this.scale * this.confirmationAverage.length;
   }
 
-  estimateMedianVal(confTarget, sufficientTxVal, successBreakPoint, requireGreater, blockHeight) {
+  /**
+   *
+   * @param {int} confTarget - desired number of confirmations
+   * @param {number} sufficientTxVal - minimum confirmed transaction per bucket
+   * @param {number} minimumSuccessRate - desired success probability
+   * @param {boolean} requireLowestPossibleFee - return lowest fee or highest success rate
+   * @param {int} blockHeight
+   * @returns {[number, EstimationResult]}
+   */
+  estimateMedianVal(confTarget, sufficientTxVal, minimumSuccessRate, requireLowestPossibleFee, blockHeight) {
     const {
       unconfirmedTransactions,
       oldUnconfirmedTransactions,
-      averageTransactionConfirmTimes,
+      averageTransactionConfirmationTarget,
       failAverage,
       average,
       confirmationAverage,
     } = this;
 
     // Counters for a bucket (or range of buckets)
-    let nConf = 0; // Number of tx's confirmed within the confTarget
-    let totalNum = 0; // Total number of tx's that were ever confirmed
-    let extraNum = 0; // Number of tx's still in mempool for confTarget or longer
+    let confirmedTransactionCount = 0; // Number of tx's confirmed within the confTarget
+    let confirmedTransactionForAllTime = 0; // Total number of tx's that were ever confirmed
+    let transactionsWithSameTargetStillInMempool = 0; // Number of tx's still in mempool for confTarget or longer
     // Number of tx's that were never confirmed but removed from the mempool after confTarget
-    let failNum = 0;
+    let neverConfirmedTransactionsLeavedMempool = 0;
     const periodTarget = parseInt(((confTarget + this.scale) - 1) / this.scale, 10);
 
     const bucketsCount = this.buckets.length - 1;
 
-    // requireGreater means we are looking for the lowest feerate such that all higher
+    // requireLowestPossibleFee means we are looking for the lowest feerate such that all higher
     // values pass, so we start at maxbucketindex (highest feerate) and look at successively
     // smaller buckets until we reach failure.  Otherwise, we are looking for the highest
     // feerate such that all lower values fail, and we go in the opposite direction.
-    const startBucket = requireGreater ? bucketsCount : 0;
-    const step = requireGreater ? -1 : 1;
+    const startBucket = requireLowestPossibleFee ? bucketsCount : 0;
+    const step = requireLowestPossibleFee ? -1 : 1;
 
     // We'll combine buckets until we have enough samples.
     // The near and far variables will define the range we've combined
@@ -209,48 +218,54 @@ class TransactionStats {
         newBucketRange = false;
       }
       curFarBucket = bucketIndex;
-      nConf += confirmationAverage[periodTarget - 1][bucketIndex];
-      totalNum += averageTransactionConfirmTimes[bucketIndex];
-      failNum += failAverage[periodTarget - 1][bucketIndex];
-      for (let confct = confTarget; confct < this.getMaxConfirms(); confct++) {
-        extraNum += unconfirmedTransactions[(blockHeight - confct) % bins][bucketIndex];
+      confirmedTransactionCount += confirmationAverage[periodTarget - 1][bucketIndex];
+      confirmedTransactionForAllTime += averageTransactionConfirmationTarget[bucketIndex];
+      neverConfirmedTransactionsLeavedMempool += failAverage[periodTarget - 1][bucketIndex];
+      for (let confirmationsCount = confTarget; confirmationsCount < this.getMaxConfirms(); confirmationsCount++) {
+        transactionsWithSameTargetStillInMempool += unconfirmedTransactions[Math.abs(blockHeight - confirmationsCount) % bins][bucketIndex];
       }
-      extraNum += oldUnconfirmedTransactions[bucketIndex];
+      transactionsWithSameTargetStillInMempool += oldUnconfirmedTransactions[bucketIndex];
       // If we have enough transaction data points in this range of buckets,
       // we can test for success
       // (Only count the confirmed data points, so that each confirmation count
       // will be looking at the same amount of data and same bucket breaks)
-      if (totalNum >= sufficientTxVal / (1 - this.decay)) {
-        const curPct = nConf / (totalNum + failNum + extraNum);
+      if (confirmedTransactionForAllTime >= sufficientTxVal / (1 - this.decay)) {
+        const curSuccessRate = confirmedTransactionCount / (confirmedTransactionForAllTime + neverConfirmedTransactionsLeavedMempool + transactionsWithSameTargetStillInMempool);
 
         // Check to see if we are no longer getting confirmed at the success rate
-        if ((requireGreater && curPct < successBreakPoint) || (!requireGreater && curPct > successBreakPoint)) {
+        const lowerFeeNeeded = requireLowestPossibleFee && minimumSuccessRate > curSuccessRate;
+        const higherSuccessRateRequired = !requireLowestPossibleFee && curSuccessRate > minimumSuccessRate;
+        if (lowerFeeNeeded || higherSuccessRateRequired) {
           if (passing) {
             // First time we hit a failure record the failed bucket
             const failMinBucket = Math.min(curNearBucket, curFarBucket);
             const failMaxBucket = Math.max(curNearBucket, curFarBucket);
             failBucket.start = failMinBucket ? this.buckets[failMinBucket - 1] : 0;
             failBucket.end = this.buckets[failMaxBucket];
-            failBucket.withinTarget = nConf;
-            failBucket.totalConfirmed = totalNum;
-            failBucket.inMempool = extraNum;
-            failBucket.leftMempool = failNum;
+            failBucket.withinTarget = confirmedTransactionCount;
+            failBucket.totalConfirmed = confirmedTransactionForAllTime;
+            failBucket.inMempool = transactionsWithSameTargetStillInMempool;
+            failBucket.leftMempool = neverConfirmedTransactionsLeavedMempool;
             passing = false;
           }
           // Otherwise update the cumulative stats, and the bucket variables
           // and reset the counters
         } else {
-          failBucket = new EstimatorBucket(); // Reset any failed bucket, currently passing
+          // Reset any failed bucket, currently passing
+          failBucket = new EstimatorBucket();
           foundAnswer = true;
           passing = true;
-          passBucket.withinTarget = nConf;
-          nConf = 0;
-          passBucket.totalConfirmed = totalNum;
-          totalNum = 0;
-          passBucket.inMempool = extraNum;
-          passBucket.leftMempool = failNum;
-          failNum = 0;
-          extraNum = 0;
+
+          passBucket.withinTarget = confirmedTransactionCount;
+          passBucket.totalConfirmed = confirmedTransactionForAllTime;
+          passBucket.inMempool = transactionsWithSameTargetStillInMempool;
+          passBucket.leftMempool = neverConfirmedTransactionsLeavedMempool;
+
+          confirmedTransactionCount = 0;
+          confirmedTransactionForAllTime = 0;
+          neverConfirmedTransactionsLeavedMempool = 0;
+          transactionsWithSameTargetStillInMempool = 0;
+
           bestNearBucket = curNearBucket;
           bestFarBucket = curFarBucket;
           newBucketRange = true;
@@ -268,15 +283,16 @@ class TransactionStats {
     const minBucket = Math.min(bestNearBucket, bestFarBucket);
     const maxBucket = Math.max(bestNearBucket, bestFarBucket);
     for (let j = minBucket; j <= maxBucket; j++) {
-      txSum += averageTransactionConfirmTimes[j];
+      txSum += averageTransactionConfirmationTarget[j];
     }
+
     if (foundAnswer && txSum !== 0) {
       txSum /= 2;
       for (let j = minBucket; j <= maxBucket; j++) {
-        if (averageTransactionConfirmTimes[j] < txSum) {
-          txSum -= averageTransactionConfirmTimes[j];
+        if (averageTransactionConfirmationTarget[j] < txSum) {
+          txSum -= averageTransactionConfirmationTarget[j];
         } else { // we're in the right bucket
-          median = average[j] / averageTransactionConfirmTimes[j];
+          median = parseInt(average[j] / averageTransactionConfirmationTarget[j], 10);
           break;
         }
       }
@@ -291,22 +307,17 @@ class TransactionStats {
       const failMaxBucket = Math.max(curNearBucket, curFarBucket);
       failBucket.start = failMinBucket ? this.buckets[failMinBucket - 1] : 0;
       failBucket.end = this.buckets[failMaxBucket];
-      failBucket.withinTarget = nConf;
-      failBucket.totalConfirmed = totalNum;
-      failBucket.inMempool = extraNum;
-      failBucket.leftMempool = failNum;
+      failBucket.withinTarget = confirmedTransactionCount;
+      failBucket.totalConfirmed = confirmedTransactionForAllTime;
+      failBucket.inMempool = transactionsWithSameTargetStillInMempool;
+      failBucket.leftMempool = neverConfirmedTransactionsLeavedMempool;
     }
 
-    // console.log(
-    //   'FeeEst: %d %s%.0f%% decay %.5f: feerate: %g from (%g - %g) %.2f%% %.1f/(%.1f %d mem %.1f out) Fail: (%g - %g) %.2f%% %.1f/(%.1f %d mem %.1f out)\n',
-    //   confTarget, requireGreater ? '>' : '<', 100.0 * successBreakPoint, this.decay,
-    //   median, passBucket.start, passBucket.end,
-    //   (100 * passBucket.withinTarget) / (passBucket.totalConfirmed + passBucket.inMempool + passBucket.leftMempool),
-    //   passBucket.withinTarget, passBucket.totalConfirmed, passBucket.inMempool, passBucket.leftMempool,
-    //   failBucket.start, failBucket.end,
-    //   (100 * failBucket.withinTarget) / (failBucket.totalConfirmed + failBucket.inMempool + failBucket.leftMempool),
-    //   failBucket.withinTarget, failBucket.totalConfirmed, failBucket.inMempool, failBucket.leftMempool,
-    // );
+    // console.log(`FeeEst: ${confTarget} ${requireGreater ? '>' : '<'} ${100.0 * successBreakPoint}
+    //   decay ${this.decay}: feerate: ${median} from (${passBucket.start} - ${passBucket.end})
+    //   ${(100 * passBucket.withinTarget) / (passBucket.totalConfirmed + passBucket.inMempool + passBucket.leftMempool)} ${passBucket.withinTarget}/(${passBucket.totalConfirmed} ${passBucket.inMempool} mem ${passBucket.leftMempool} out)
+    //   Fail: (${failBucket.start} - ${failBucket.end})
+    //   ${(100 * failBucket.withinTarget) / (failBucket.totalConfirmed + failBucket.inMempool + failBucket.leftMempool)} ${failBucket.withinTarget}/(${failBucket.totalConfirmed} ${failBucket.inMempool} mem ${failBucket.leftMempool} out)`);
     const result = new EstimationResult(passBucket, failBucket, this.decay, this.scale);
 
     return [

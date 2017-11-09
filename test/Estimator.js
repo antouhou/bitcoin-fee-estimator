@@ -1,3 +1,5 @@
+const crypto = require('crypto');
+
 const { expect } = require('chai');
 const Estimator = require('../src/Estimator');
 const FeeRate = require('../src/FeeRate');
@@ -40,6 +42,49 @@ const block = {
   previousblockhash: '00000000175cba6efcb1e3e2d15f7911d4d8c137dc6f501263330c9b7dc8074a',
   nextblockhash: '0000000028e6d5190c7b9709ce561af6800e5aea74a87b9c564907facf1ae805',
 };
+
+// For test we will assume that 4 transactions can be added to mempool on each iterration block and 3 can be mined
+
+function generateRandomMempoolData(len, height) {
+  const mempool = {};
+  for (let i = 0; i < len; i++) {
+    mempool[crypto.createHash('sha256').update((Date.now() + Math.random()).toString()).digest('hex')] = {
+      size: 23818,
+      fee: (Math.random() * (0.00047646 - 0.00023823)) + 0.00023823,
+      // fee: 0.00023823,
+      modifiedfee: 0.00023823,
+      time: 1510165507,
+      height,
+      startingpriority: 15191056856720.27,
+      currentpriority: 15191056856720.27,
+      descendantcount: 1,
+      descendantsize: 23818,
+      descendantfees: 23823,
+      depends: [
+      ],
+    };
+  }
+  return mempool;
+}
+
+function transformMempoolData(rawmempooldata) {
+  const hashes = Object.keys(rawmempooldata);
+  const arr = [];
+  for (let i = 0; i < hashes.length; i++) {
+    rawmempooldata[hashes[i]].hash = hashes[i];
+    arr.push(rawmempooldata[hashes[i]]);
+  }
+  return arr;
+}
+
+function generateBlock(mempooldata, prevBlockHeight, transactionsToInclude) {
+  mempooldata.sort((a, b) => b.fee - a.fee);
+  const txToIncludeInBlock = mempooldata.splice(0, transactionsToInclude);
+  return {
+    height: prevBlockHeight + 1,
+    tx: txToIncludeInBlock.map(tx => tx.hash),
+  };
+}
 
 const rawMempool = {
   b6cad1deec1635576ad984db3932cabfdea7f666f65b7bf2cf02fcbb28214061: {
@@ -173,7 +218,7 @@ describe('Estimator', () => {
       const mempool = copyMempool();
       const mempoolSize = Object.keys(mempool).length;
       expect(estimator.mempoolTransactions.size).to.equal(0);
-      estimator.addTransactionsToMempool(mempool);
+      estimator.processNewMempoolTransactions(mempool);
       expect(estimator.mempoolTransactions.size).to.equal(mempoolSize);
     });
     it('should add transactions to mempool, add to stats and remove them when they are confirmed', () => {
@@ -182,7 +227,7 @@ describe('Estimator', () => {
       const mempool = copyMempool();
       const mempoolSize = Object.keys(mempool).length;
       expect(estimator.mempoolTransactions.size).to.equal(0);
-      estimator.addTransactionsToMempool(mempool);
+      estimator.processNewMempoolTransactions(mempool);
       expect(estimator.mempoolTransactions.size).to.equal(mempoolSize);
       /* 28 is corresponding to block 23212 (blockHeight % maxNumberOfConfirmations for this stat),
       * 0 to fee 1000 satoshis per k (lower bound of buckets),
@@ -205,27 +250,73 @@ describe('Estimator', () => {
 
   describe('.estimateSmartFee()', () => {
     it('Should return FeeRate', () => {
-      const transactions = {};
       const estimator = new Estimator();
       const fee = estimator.estimateSmartFee(10);
       expect(fee).to.be.instanceof(FeeRate);
     });
     it('Should estimate fee depending on target', () => {
       const estimator = new Estimator();
-      const mempool = copyMempool();
 
-      // We must to collect enough data before making estimations
-      estimator.processBlock(currentBlock.height, currentBlock.tx);
-      estimator.addTransactionsToMempool(mempool);
-      estimator.processBlock(block.height, block.tx);
-      estimator.processBlock(block.height + 1, []);
-      estimator.processBlock(block.height + 2, []);
-      estimator.processBlock(block.height + 3, []);
-      estimator.processBlock(block.height + 4, []);
+      let wholePool = [];
+      for (let i = 1; i < 11; i++) {
+        const newBlock = generateBlock(wholePool, i - 1, 10);
+        const newMempoolData = generateRandomMempoolData(11, i);
+        wholePool = wholePool.concat(transformMempoolData(newMempoolData));
+        estimator.processBlock(newBlock.height, newBlock.tx);
+        estimator.processNewMempoolTransactions(newMempoolData);
+      }
 
-      const fee = estimator.estimateSmartFee(10);
-      console.log(fee);
+      const fees = [];
+      for (let i = 1; i < 7; i++) {
+        fees.push(estimator.estimateSmartFee(i));
+      }
+      expect(fees[0]).to.be.instanceof(FeeRate);
+    });
+    it('Should return conservative fee', () => {
+      const estimator = new Estimator();
+      let wholePool = [];
+      for (let i = 1; i < 11; i++) {
+        const newBlock = generateBlock(wholePool, i - 1, 10);
+        const newMempoolData = generateRandomMempoolData(9, i);
+        wholePool = wholePool.concat(transformMempoolData(newMempoolData));
+        estimator.processBlock(newBlock.height, newBlock.tx);
+        estimator.processNewMempoolTransactions(newMempoolData);
+      }
+      const fee = estimator.estimateSmartFee(2, true);
       expect(fee).to.be.instanceof(FeeRate);
+      expect(fee.getFeePerK()).to.be.above(1000);
+    });
+    it('Should not give any estimations under 1 confirmation', () => {
+      const estimator = new Estimator();
+
+      // fill estimator with data
+      let wholePool = [];
+      for (let i = 1; i < 10; i++) {
+        const newBlock = generateBlock(wholePool, i - 1, 10);
+        const newMempoolData = generateRandomMempoolData(10, i);
+        wholePool = wholePool.concat(transformMempoolData(newMempoolData));
+        estimator.processBlock(newBlock.height, newBlock.tx);
+        estimator.processNewMempoolTransactions(newMempoolData);
+      }
+
+      expect(estimator.estimateSmartFee(1).getFeePerK()).to.be.above(0);
+      expect(estimator.estimateSmartFee(0).getFeePerK()).to.equal(0);
+    });
+    it('Should not give any estimations over 1008 confirmation', () => {
+      const estimator = new Estimator();
+
+      // fill estimator with data
+      let wholePool = [];
+      for (let i = 1; i < 10; i++) {
+        const newBlock = generateBlock(wholePool, i - 1, 10);
+        const newMempoolData = generateRandomMempoolData(10, i);
+        wholePool = wholePool.concat(transformMempoolData(newMempoolData));
+        estimator.processBlock(newBlock.height, newBlock.tx);
+        estimator.processNewMempoolTransactions(newMempoolData);
+      }
+
+      expect(estimator.estimateSmartFee(1008).getFeePerK()).to.be.above(0);
+      expect(estimator.estimateSmartFee(1009).getFeePerK()).to.equal(0);
     });
   });
 });

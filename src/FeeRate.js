@@ -2,6 +2,12 @@
 const satoshisInBtc = 100000000;
 
 class FeeRate {
+  static fromSatoshisPerK(satoshisPerK) {
+    const feeRate = new FeeRate(0);
+    feeRate.satoshisPerK = satoshisPerK;
+    return feeRate;
+  }
+
   constructor(feePaidInBtc, transactionSizeInBytes) {
     if (transactionSizeInBytes > Math.MAX_SAFE_INTEGER) {
       throw new Error('Transaction size is too big');

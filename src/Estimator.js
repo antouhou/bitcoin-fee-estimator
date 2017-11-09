@@ -60,7 +60,7 @@ class Estimator {
     return false;
   }
 
-  addTransactionsToMempool(rawMempoolTransactions) {
+  processNewMempoolTransactions(rawMempoolTransactions) {
     const txids = Object.keys(rawMempoolTransactions);
     txids.forEach((hash) => {
       const transaction = rawMempoolTransactions[hash];
@@ -72,7 +72,8 @@ class Estimator {
 
   /**
    * Adds transaction to mempool.
-   * Notice: It is important to process blocks before adding new mempool transactions
+   * Notice: It is important to process blocks before adding new mempool transactions, because
+   * only transactions which entered mempool at same height as last block will be processed.
    * @param transaction mempoolTransactionEntry
    * @param isValidFeeEstimate
    * NOTICE: transaction should have 'hash' property, which is not in raw mempool data
@@ -107,8 +108,8 @@ class Estimator {
     this.mempoolTransactions.set(hash, new MempoolTransaction(transaction, bucketIndex));
   }
 
-  processBlockTx(blockHeight, entry) {
-    if (!this.removeTx(entry.hash, true)) {
+  processBlockTx(blockHeight, transaction) {
+    if (!this.removeTx(transaction.hash, true)) {
       // This transaction wasn't being tracked for fee estimation
       return false;
     }
@@ -116,16 +117,15 @@ class Estimator {
     // How many blocks did it take for miners to include this transaction?
     // blocksToConfirm is 1-based, so a transaction included in the earliest
     // possible block has confirmation count of 1
-    const blocksToConfirm = blockHeight - entry.height;
+    const blocksToConfirm = blockHeight - transaction.height;
     if (blocksToConfirm <= 0) {
       // This can't happen because we don't process transactions from a block with a height
       // lower than our greatest seen height
-      console.warn('Blockpolicy error Transaction had negative blocksToConfirm');
       return false;
     }
 
     // Fee rates are stored and reported as BTC-per-kb:
-    const feeRate = new FeeRate(entry.fee, entry.size);
+    const feeRate = new FeeRate(transaction.fee, transaction.size);
 
     this.feeStats.record(blocksToConfirm, feeRate.getFeePerK());
     this.shortStats.record(blocksToConfirm, feeRate.getFeePerK());
@@ -162,27 +162,16 @@ class Estimator {
     this.shortStats.updateMovingAverages();
     this.longStats.updateMovingAverages();
 
-    let countedTxs = 0;
     // Update averages with data points from current block
     txids.forEach((txid) => {
       if (this.mempoolTransactions.has(txid)) {
-        const transaction = this.mempoolTransactions.get(txid);
-        if (this.processBlockTx(blockHeight, transaction)) { countedTxs++; }
+        this.processBlockTx(blockHeight, this.mempoolTransactions.get(txid));
       }
     });
 
     if (this.firstRecordedHeight === 0) {
       this.firstRecordedHeight = this.bestSeenHeight;
-      // todo: Remove later
-      console.info('First recorded height updated');
     }
-
-    const message = `Blockpolicy estimates updated by ${countedTxs} of ${txids.length} block txs, 
-      since last block ${this.trackedTxs} of ${this.trackedTxs + this.untrackedTxs} tracked, 
-      mempool map size ${this.mempoolTransactions.size}, 
-      max target ${this.maxUsableEstimate()} from ${this.historicalBlockSpan() > this.blockSpan() ? 'historical' : 'current'}`;
-    // todo: remove
-    console.debug(message);
 
     this.trackedTxs = 0;
     this.untrackedTxs = 0;
@@ -259,13 +248,13 @@ class Estimator {
      * the purpose of conservative estimates is not to let short term
      * fluctuations lower our estimates by too much.
      */
-    [halfEst, estimationResult] = this.estimateCombinedFee(target / 2, HALF_SUCCESS_PCT, true, estimationResult);
+    [halfEst, estimationResult] = this.estimateCombinedFee(parseInt(target / 2, 10), HALF_SUCCESS_PCT, true);
     if (feeCalculation) {
       feeCalculation.est = estimationResult;
       feeCalculation.reason = FeeReason.HALF_ESTIMATE;
     }
     median = halfEst;
-    [actualEst, estimationResult] = this.estimateCombinedFee(target, SUCCESS_PCT, true, estimationResult);
+    [actualEst, estimationResult] = this.estimateCombinedFee(target, SUCCESS_PCT, true);
     if (actualEst > median) {
       median = actualEst;
       if (feeCalculation) {
@@ -273,7 +262,7 @@ class Estimator {
         feeCalculation.reason = FeeReason.FULL_ESTIMATE;
       }
     }
-    [doubleEst, estimationResult] = this.estimateCombinedFee(2 * target, DOUBLE_SUCCESS_PCT, !isConservative, estimationResult);
+    [doubleEst, estimationResult] = this.estimateCombinedFee(2 * target, DOUBLE_SUCCESS_PCT, !isConservative);
     if (doubleEst > median) {
       median = doubleEst;
       if (feeCalculation) {
@@ -293,9 +282,14 @@ class Estimator {
       }
     }
 
-    if (median < 0) return new FeeRate(0); // error condition
+    // You can uncoment this line to see some calculation details
+    // console.log('fee calculation:', feeCalculation);
+    if (median < 0) {
+      // error condition
+      return new FeeRate(0);
+    }
 
-    return new FeeRate(median);
+    return FeeRate.fromSatoshisPerK(median);
   }
 
   /** Return a fee estimate at the required successThreshold from the shortest
