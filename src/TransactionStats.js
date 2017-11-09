@@ -27,16 +27,16 @@ class TransactionStats {
     /**
      * For each bucket X:
      * Count the total # of txs in each bucket
-     * Track the historical moving average of this total over blocks
+     * Track the historical moving feeSumPerBucket of this total over blocks
      * @type {Array<number>}
      */
-    this.averageTransactionConfirmationTarget = new Array(this.buckets.length).fill(0);
+    this.confirmedTransactionsPerBucket = new Array(this.buckets.length).fill(0);
     /**
      * Count the total # of txs confirmed within Y blocks in each bucket
-     * Track the historical moving average of theses totals over blocks
+     * Track the historical moving feeSumPerBucket of theses totals over blocks
      * @type {Array<number>}
      */
-    this.confirmationAverage = getTwoDimensionalArrayWithZeros(this.maxPeriods, this.buckets.length);
+    this.confirmationsPerBlock = getTwoDimensionalArrayWithZeros(this.maxPeriods, this.buckets.length);
     /**
      * Track moving avg of txs which have been evicted from the mempool
      * after failing to be confirmed within Y blocks
@@ -45,10 +45,10 @@ class TransactionStats {
     this.failAverage = getTwoDimensionalArrayWithZeros(this.maxPeriods, this.buckets.length);
     /**
      * Sum the total feerate of all tx's in each bucket
-     * Track the historical moving average of this total over blocks
+     * Track the historical moving feeSumPerBucket of this total over blocks
      * @type {Array<number>}
      */
-    this.average = new Array(this.buckets.length).fill(0);
+    this.feeSumPerBucket = new Array(this.buckets.length).fill(0);
     /**
      * Mempool counts of outstanding transactions
      * For each bucket X, track the number of transactions in the mempool
@@ -73,33 +73,32 @@ class TransactionStats {
   }
 
   /**
-   *
+   * Records that transaction has been confirmed
    * @param blocksToConfirm
-   * @param val - fee in satoshis
+   * @param val - fee in satoshis per kilobyte
    */
   record(blocksToConfirm, val) {
-    // Todo: danger! val in btc, buckets in satoshis!
     // blocksToConfirm is 1-based
     if (blocksToConfirm < 1) { return; }
     const periodsToConfirm = parseInt(((blocksToConfirm + this.scale) - 1) / this.scale, 10);
     const bucketIndex = lowerBound(this.buckets, val);
-    for (let i = periodsToConfirm; i <= this.confirmationAverage.length; i++) {
-      this.confirmationAverage[i - 1][bucketIndex]++;
+    for (let i = periodsToConfirm; i <= this.confirmationsPerBlock.length; i++) {
+      this.confirmationsPerBlock[i - 1][bucketIndex]++;
     }
-    this.averageTransactionConfirmationTarget[bucketIndex]++;
-    this.average[bucketIndex] += val;
+    this.confirmedTransactionsPerBucket[bucketIndex]++;
+    this.feeSumPerBucket[bucketIndex] += val;
   }
 
   updateMovingAverages() {
     for (let j = 0; j < this.buckets.length; j++) {
-      for (let i = 0; i < this.confirmationAverage.length; i++) {
-        this.confirmationAverage[i][j] = this.confirmationAverage[i][j] * this.decay;
+      for (let i = 0; i < this.confirmationsPerBlock.length; i++) {
+        this.confirmationsPerBlock[i][j] = this.confirmationsPerBlock[i][j] * this.decay;
       }
       for (let i = 0; i < this.failAverage.length; i++) {
         this.failAverage[i][j] = this.failAverage[i][j] * this.decay;
       }
-      this.average[j] = this.average[j] * this.decay;
-      this.averageTransactionConfirmationTarget[j] = this.averageTransactionConfirmationTarget[j] * this.decay;
+      this.feeSumPerBucket[j] = this.feeSumPerBucket[j] * this.decay;
+      this.confirmedTransactionsPerBucket[j] = this.confirmedTransactionsPerBucket[j] * this.decay;
     }
   }
 
@@ -138,8 +137,7 @@ class TransactionStats {
       if (this.unconfirmedTransactions[blockIndex][bucketIndex] > 0) {
         this.unconfirmedTransactions[blockIndex][bucketIndex]--;
       } else {
-        // todo: It is not actually error, but warning maybe?
-        throw new Error(`Can't remove tx: transactions at blockIndex = ${blockIndex}, bucketIndex = ${bucketIndex} already empty`);
+        console.log(`Can't remove tx: transactions at blockIndex = ${blockIndex}, bucketIndex = ${bucketIndex} already empty`);
       }
     }
     // Only counts as a failure if not confirmed for entire period
@@ -155,7 +153,7 @@ class TransactionStats {
    * @returns {number}
    */
   getMaxConfirms() {
-    return this.scale * this.confirmationAverage.length;
+    return this.scale * this.confirmationsPerBlock.length;
   }
 
   /**
@@ -171,10 +169,10 @@ class TransactionStats {
     const {
       unconfirmedTransactions,
       oldUnconfirmedTransactions,
-      averageTransactionConfirmationTarget,
+      confirmedTransactionsPerBucket,
       failAverage,
-      average,
-      confirmationAverage,
+      feeSumPerBucket,
+      confirmationsPerBlock,
     } = this;
 
     // Counters for a bucket (or range of buckets)
@@ -218,8 +216,8 @@ class TransactionStats {
         newBucketRange = false;
       }
       curFarBucket = bucketIndex;
-      confirmedTransactionCount += confirmationAverage[periodTarget - 1][bucketIndex];
-      confirmedTransactionForAllTime += averageTransactionConfirmationTarget[bucketIndex];
+      confirmedTransactionCount += confirmationsPerBlock[periodTarget - 1][bucketIndex];
+      confirmedTransactionForAllTime += confirmedTransactionsPerBucket[bucketIndex];
       neverConfirmedTransactionsLeavedMempool += failAverage[periodTarget - 1][bucketIndex];
       for (let confirmationsCount = confTarget; confirmationsCount < this.getMaxConfirms(); confirmationsCount++) {
         transactionsWithSameTargetStillInMempool += unconfirmedTransactions[Math.abs(blockHeight - confirmationsCount) % bins][bucketIndex];
@@ -276,23 +274,23 @@ class TransactionStats {
     let median = -1;
     let txSum = 0;
 
-    // Calculate the "average" feerate of the best bucket range that met success conditions
-    // Find the bucket with the median transaction and then report the average feerate from that bucket
+    // Calculate the "feeSumPerBucket" feerate of the best bucket range that met success conditions
+    // Find the bucket with the median transaction and then report the feeSumPerBucket feerate from that bucket
     // This is a compromise between finding the median which we can't since we don't save all tx's
-    // and reporting the average which is less accurate
+    // and reporting the feeSumPerBucket which is less accurate
     const minBucket = Math.min(bestNearBucket, bestFarBucket);
     const maxBucket = Math.max(bestNearBucket, bestFarBucket);
     for (let j = minBucket; j <= maxBucket; j++) {
-      txSum += averageTransactionConfirmationTarget[j];
+      txSum += confirmedTransactionsPerBucket[j];
     }
 
     if (foundAnswer && txSum !== 0) {
       txSum /= 2;
       for (let j = minBucket; j <= maxBucket; j++) {
-        if (averageTransactionConfirmationTarget[j] < txSum) {
-          txSum -= averageTransactionConfirmationTarget[j];
+        if (confirmedTransactionsPerBucket[j] < txSum) {
+          txSum -= confirmedTransactionsPerBucket[j];
         } else { // we're in the right bucket
-          median = parseInt(average[j] / averageTransactionConfirmationTarget[j], 10);
+          median = parseInt(feeSumPerBucket[j] / confirmedTransactionsPerBucket[j], 10);
           break;
         }
       }

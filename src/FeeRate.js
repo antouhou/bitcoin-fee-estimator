@@ -9,10 +9,6 @@ class FeeRate {
   }
 
   constructor(feePaidInBtc, transactionSizeInBytes) {
-    if (transactionSizeInBytes > Math.MAX_SAFE_INTEGER) {
-      throw new Error('Transaction size is too big');
-    }
-
     if (transactionSizeInBytes > 0) {
       const btcPerByte = feePaidInBtc / transactionSizeInBytes;
       const btcPerK = btcPerByte * 1000;
@@ -23,10 +19,6 @@ class FeeRate {
   }
 
   getFee(transactionSizeInBytes) {
-    if (transactionSizeInBytes > Math.MAX_SAFE_INTEGER) {
-      throw new Error('Transaction size is too big');
-    }
-
     let feeInSatoshis = (this.satoshisPerK * transactionSizeInBytes) / 1000;
 
     if (feeInSatoshis === 0 && transactionSizeInBytes !== 0) {
