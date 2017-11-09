@@ -210,5 +210,22 @@ describe('Estimator', () => {
       const fee = estimator.estimateSmartFee(10);
       expect(fee).to.be.instanceof(FeeRate);
     });
+    it('Should estimate fee depending on target', () => {
+      const estimator = new Estimator();
+      const mempool = copyMempool();
+
+      // We must to collect enough data before making estimations
+      estimator.processBlock(currentBlock.height, currentBlock.tx);
+      estimator.addTransactionsToMempool(mempool);
+      estimator.processBlock(block.height, block.tx);
+      estimator.processBlock(block.height + 1, []);
+      estimator.processBlock(block.height + 2, []);
+      estimator.processBlock(block.height + 3, []);
+      estimator.processBlock(block.height + 4, []);
+
+      const fee = estimator.estimateSmartFee(10);
+      console.log(fee);
+      expect(fee).to.be.instanceof(FeeRate);
+    });
   });
 });

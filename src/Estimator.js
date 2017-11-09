@@ -171,10 +171,10 @@ class Estimator {
       }
     });
 
-    if (this.firstRecordedHeight === 0 && countedTxs > 0) {
+    if (this.firstRecordedHeight === 0) {
       this.firstRecordedHeight = this.bestSeenHeight;
       // todo: Remove later
-      console.debug('First recorded height updated');
+      console.info('First recorded height updated');
     }
 
     const message = `Blockpolicy estimates updated by ${countedTxs} of ${txids.length} block txs, 
@@ -189,7 +189,9 @@ class Estimator {
   }
 
   blockSpan() {
-    if (this.firstRecordedHeight === 0) return 0;
+    if (this.firstRecordedHeight === 0) {
+      return 0;
+    }
     if (this.bestSeenHeight < this.firstRecordedHeight) {
       throw new Error('First recorded height can not me bigger than last seen height');
     }
@@ -211,7 +213,7 @@ class Estimator {
 
   maxUsableEstimate() {
     // Block spans are divided by 2 to make sure there are enough potential failing data points for the estimate
-    return Math.min(this.longStats.getMaxConfirms(), Math.max(this.blockSpan(), this.historicalBlockSpan()) / 2);
+    return Math.min(this.longStats.getMaxConfirms(), parseInt(Math.max(this.blockSpan(), this.historicalBlockSpan()) / 2, 10));
   }
 
   estimateSmartFee(confirmationTarget, isConservative = false) {
@@ -243,7 +245,10 @@ class Estimator {
     }
     if (feeCalculation) feeCalculation.returnedTarget = target;
 
-    if (target <= 1) return new FeeRate(0); // error condition
+    if (target <= 1) {
+      console.log('Target is to small or we do not have enough data', target);
+      return new FeeRate(0);
+    }
     /** true is passed to estimateCombined fee for target/2 and target so
      * that we check the max confirms for shorter time horizons as well.
      * This is necessary to preserve monotonically increasing estimates.

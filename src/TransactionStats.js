@@ -158,7 +158,7 @@ class TransactionStats {
     return this.scale * this.confirmationAverage.length;
   }
 
-  estimateMedianVal(confTarget, sufficientTxVal, successBreakPoint, requireGreater, nBlockHeight) {
+  estimateMedianVal(confTarget, sufficientTxVal, successBreakPoint, requireGreater, blockHeight) {
     const {
       unconfirmedTransactions,
       oldUnconfirmedTransactions,
@@ -174,7 +174,7 @@ class TransactionStats {
     let extraNum = 0; // Number of tx's still in mempool for confTarget or longer
     // Number of tx's that were never confirmed but removed from the mempool after confTarget
     let failNum = 0;
-    const periodTarget = ((confTarget + this.scale) - 1) / this.scale;
+    const periodTarget = parseInt(((confTarget + this.scale) - 1) / this.scale, 10);
 
     const bucketsCount = this.buckets.length - 1;
 
@@ -213,7 +213,7 @@ class TransactionStats {
       totalNum += averageTransactionConfirmTimes[bucketIndex];
       failNum += failAverage[periodTarget - 1][bucketIndex];
       for (let confct = confTarget; confct < this.getMaxConfirms(); confct++) {
-        extraNum += unconfirmedTransactions[(nBlockHeight - confct) % bins][bucketIndex];
+        extraNum += unconfirmedTransactions[(blockHeight - confct) % bins][bucketIndex];
       }
       extraNum += oldUnconfirmedTransactions[bucketIndex];
       // If we have enough transaction data points in this range of buckets,
