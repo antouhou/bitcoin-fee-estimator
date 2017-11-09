@@ -28,3 +28,4 @@ regtest/data/node1/regtest
 regtest/data/node2/regtest
 regtest/data/node3/regtest
 .idea
+.nyc_output
