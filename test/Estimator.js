@@ -154,7 +154,6 @@ describe('Estimator', () => {
   describe('constructor', () => {
     it('should fill estimator data correctly', () => {
       const estimator = new Estimator();
-      expect(estimator.bucketMap).to.be.instanceof(Map);
       expect(estimator.mempoolTransactions).to.be.instanceof(Map);
     });
   });

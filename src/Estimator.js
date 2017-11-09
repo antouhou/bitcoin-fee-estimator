@@ -27,7 +27,6 @@ const {
 class Estimator {
   constructor(bestSeenHeight = 0, firstRecordedHeight = 0, historicalFirst = 0, historicalBest = 0, trackedTxs = 0, untrackedTxs = 0) {
     this.buckets = [];
-    this.bucketMap = new Map();
     this.bestSeenHeight = bestSeenHeight;
     this.firstRecordedHeight = firstRecordedHeight;
     this.historicalFirst = historicalFirst;
@@ -35,15 +34,13 @@ class Estimator {
     this.trackedTxs = trackedTxs;
     this.untrackedTxs = untrackedTxs;
     for (let bucketBoundary = MIN_BUCKET_FEERATE; bucketBoundary <= MAX_BUCKET_FEERATE; bucketBoundary *= FEE_SPACING) {
-      const bucketIndex = this.buckets.push(bucketBoundary) - 1;
-      this.bucketMap.set(bucketBoundary, bucketIndex);
+      this.buckets.push(bucketBoundary);
     }
-    const bucketIndex = this.buckets.push(INF_FEERATE) - 1;
-    this.bucketMap.set(INF_FEERATE, bucketIndex);
+    this.buckets.push(INF_FEERATE);
 
-    this.feeStats = new TransactionStats(this.buckets, this.bucketMap, MED_BLOCK_PERIODS, MED_DECAY, MED_SCALE);
-    this.shortStats = new TransactionStats(this.buckets, this.bucketMap, SHORT_BLOCK_PERIODS, SHORT_DECAY, SHORT_SCALE);
-    this.longStats = new TransactionStats(this.buckets, this.bucketMap, LONG_BLOCK_PERIODS, LONG_DECAY, LONG_SCALE);
+    this.feeStats = new TransactionStats(this.buckets, MED_BLOCK_PERIODS, MED_DECAY, MED_SCALE);
+    this.shortStats = new TransactionStats(this.buckets, SHORT_BLOCK_PERIODS, SHORT_DECAY, SHORT_SCALE);
+    this.longStats = new TransactionStats(this.buckets, LONG_BLOCK_PERIODS, LONG_DECAY, LONG_SCALE);
 
     this.mempoolTransactions = new Map();
   }

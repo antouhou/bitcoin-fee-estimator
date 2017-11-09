@@ -11,17 +11,15 @@ const { lowerBound } = require('./utils');
 class TransactionStats {
   /**
    * @param {Array<number>} buckets
-   * @param {Map} bucketMap
    * @param {number} maxPeriods
    * @param {number} decay
    * @param {number} scale
    */
-  constructor(buckets, bucketMap, maxPeriods, decay, scale) {
+  constructor(buckets, maxPeriods, decay, scale) {
     if (scale === 0) {
       throw new Error('scale must non-zero');
     }
     this.buckets = buckets;
-    this.bucketMap = bucketMap;
     this.decay = decay;
     this.scale = scale;
     this.maxPeriods = maxPeriods;
@@ -73,12 +71,6 @@ class TransactionStats {
     }
   }
 
-  getClosestBucketIndex(feeInSatoshis) {
-    const closestBucket = lowerBound(this.bucketMap.keys(), feeInSatoshis);
-    const closestBucketKey = Array.from(this.bucketMap.keys())[closestBucket];
-    return this.bucketMap.get(closestBucketKey);
-  }
-
   /**
    *
    * @param blocksToConfirm
@@ -89,7 +81,7 @@ class TransactionStats {
     // blocksToConfirm is 1-based
     if (blocksToConfirm < 1) { return; }
     const periodsToConfirm = ((blocksToConfirm + this.scale) - 1) / this.scale;
-    const bucketIndex = this.getClosestBucketIndex(val);
+    const bucketIndex = lowerBound(this.buckets, val);
     for (let i = periodsToConfirm; i <= this.confirmationAverage.length; i++) {
       this.confirmationAverage[i - 1][bucketIndex]++;
     }
@@ -116,8 +108,9 @@ class TransactionStats {
    * @returns {V}
    */
   addTx(blockHeight, feePerKInSatoshis) {
-    const bucketIndex = this.getClosestBucketIndex(feePerKInSatoshis);
+    const bucketIndex = lowerBound(this.buckets, feePerKInSatoshis);
     const blockIndex = blockHeight % this.unconfirmedTransactions.length;
+    console.debug(`Add tx at blockIndex = ${blockIndex}, bucketIndex = ${bucketIndex}`);
     this.unconfirmedTransactions[blockIndex][bucketIndex]++;
     return bucketIndex;
   }
