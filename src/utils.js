@@ -5,7 +5,7 @@
  * @returns {number} index
  */
 const lowerBound = function lowerBound(iterable, value) {
-  const array = Array.from(iterable);
+  const array = Array.isArray(iterable) ? iterable : Array.from(iterable);
   const arrayCopy = array.slice(0);
   const closestGreaterOrEqualElement = arrayCopy.sort((a, b) => Math.abs(value - a) - Math.abs(value - b))[0];
   const index = array.indexOf(closestGreaterOrEqualElement);
