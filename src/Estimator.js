@@ -49,7 +49,7 @@ class Estimator {
     const transaction = this.mempoolTransactions.get(hash);
     const lastAddedTransactionHash = Array.from(this.mempoolTransactions.keys())[this.mempoolTransactions.size - 1];
     const isLastAdded = lastAddedTransactionHash === hash;
-    // todo: Why should it give any sense?
+    // todo: Why should it make any sense?
     if (!isLastAdded) {
       this.feeStats.removeTx(transaction.blockHeight, this.bestSeenHeight, transaction.bucketIndex, inBlock);
       this.shortStats.removeTx(transaction.blockHeight, this.bestSeenHeight, transaction.bucketIndex, inBlock);
@@ -75,9 +75,9 @@ class Estimator {
    * Notice: It is important to process blocks before adding new mempool transactions
    * @param transaction mempoolTransactionEntry
    * @param isValidFeeEstimate
+   * NOTICE: transaction should have 'hash' property, which is not in raw mempool data
    */
   addTransactionToMempool(transaction, isValidFeeEstimate) {
-    // todo: need to extract hash first
     const { hash, height } = transaction;
     if (this.mempoolTransactions.has(hash)) {
       return;
@@ -98,7 +98,6 @@ class Estimator {
       return;
     }
     this.trackedTxs++;
-
     // Fee rates are stored and reported as BTC-per-kb:
     const feeRate = new FeeRate(transaction.fee, transaction.size);
 
@@ -175,7 +174,7 @@ class Estimator {
     if (this.firstRecordedHeight === 0 && countedTxs > 0) {
       this.firstRecordedHeight = this.bestSeenHeight;
       // todo: Remove later
-      console.info('First recorded height updated');
+      console.debug('First recorded height updated');
     }
 
     const message = `Blockpolicy estimates updated by ${countedTxs} of ${txids.length} block txs, 
@@ -183,7 +182,7 @@ class Estimator {
       mempool map size ${this.mempoolTransactions.size}, 
       max target ${this.maxUsableEstimate()} from ${this.historicalBlockSpan() > this.blockSpan() ? 'historical' : 'current'}`;
     // todo: remove
-    console.info(message);
+    console.debug(message);
 
     this.trackedTxs = 0;
     this.untrackedTxs = 0;

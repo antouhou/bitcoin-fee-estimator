@@ -12,6 +12,15 @@ const lowerBound = function lowerBound(iterable, value) {
   return index;
 };
 
+const getTwoDimensionalArrayWithZeros = function getTwoDimensionalArrayWithZeros(outerSize, innerSize) {
+  const outer = new Array(outerSize);
+  for (let i = 0; i < outerSize; i++) {
+    outer[i] = new Array(innerSize).fill(0);
+  }
+  return outer;
+};
+
 module.exports = {
   lowerBound,
+  getTwoDimensionalArrayWithZeros,
 };

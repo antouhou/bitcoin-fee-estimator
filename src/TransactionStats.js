@@ -1,5 +1,5 @@
 const { EstimatorBucket, EstimationResult } = require('./dataStructures');
-const { lowerBound } = require('./utils');
+const { lowerBound, getTwoDimensionalArrayWithZeros } = require('./utils');
 /**
  * We will instantiate an instance of this class to track transactions that were
  * included in a block. We will lump transactions into a bucket according to their
@@ -36,13 +36,13 @@ class TransactionStats {
      * Track the historical moving average of theses totals over blocks
      * @type {Array<number>}
      */
-    this.confirmationAverage = new Array(this.maxPeriods).fill(new Array(this.buckets.length).fill(0));
+    this.confirmationAverage = getTwoDimensionalArrayWithZeros(this.maxPeriods, this.buckets.length);
     /**
      * Track moving avg of txs which have been evicted from the mempool
      * after failing to be confirmed within Y blocks
      * @type {Array<number>}
      */
-    this.failAverage = new Array(this.maxPeriods).fill(new Array(this.buckets.length).fill(0));
+    this.failAverage = getTwoDimensionalArrayWithZeros(this.maxPeriods, this.buckets.length);
     /**
      * Sum the total feerate of all tx's in each bucket
      * Track the historical moving average of this total over blocks
@@ -55,7 +55,7 @@ class TransactionStats {
      * that are unconfirmed for each possible confirmation value Y
      * @type {Array<number>}
      */
-    this.unconfirmedTransactions = new Array(this.getMaxConfirms()).fill(new Array(this.buckets.length).fill(0));
+    this.unconfirmedTransactions = getTwoDimensionalArrayWithZeros(this.getMaxConfirms(), this.buckets.length);
     /**
      * Transactions count still unconfirmed after GetMaxConfirms for each bucket.
      * So array index is bucket index, and value is transactions count.
@@ -65,9 +65,10 @@ class TransactionStats {
   }
 
   clearCurrent(blockHeight) {
+    const blockIndex = blockHeight % this.unconfirmedTransactions.length;
     for (let j = 0; j < this.buckets.length; j++) {
-      this.oldUnconfirmedTransactions[j] += this.unconfirmedTransactions[blockHeight % this.unconfirmedTransactions.length][j];
-      this.unconfirmedTransactions[blockHeight % this.unconfirmedTransactions.length][j] = 0;
+      this.oldUnconfirmedTransactions[j] += this.unconfirmedTransactions[blockIndex][j];
+      this.unconfirmedTransactions[blockIndex][j] = 0;
     }
   }
 
@@ -103,14 +104,14 @@ class TransactionStats {
   }
 
   /**
-   * @param blockHeight
-   * @param feePerKInSatoshis
-   * @returns {V}
+   * Add data about transaction to unconfirmed transactions
+   * @param blockHeight - height when transaction entered mempool
+   * @param feeInSatoshisPerK - fee in satoshis per kilobyte
+   * @returns {number} - bucket index
    */
-  addTx(blockHeight, feePerKInSatoshis) {
-    const bucketIndex = lowerBound(this.buckets, feePerKInSatoshis);
+  addTx(blockHeight, feeInSatoshisPerK) {
+    const bucketIndex = lowerBound(this.buckets, feeInSatoshisPerK);
     const blockIndex = blockHeight % this.unconfirmedTransactions.length;
-    console.debug(`Add tx at blockIndex = ${blockIndex}, bucketIndex = ${bucketIndex}`);
     this.unconfirmedTransactions[blockIndex][bucketIndex]++;
     return bucketIndex;
   }
@@ -137,8 +138,8 @@ class TransactionStats {
       if (this.unconfirmedTransactions[blockIndex][bucketIndex] > 0) {
         this.unconfirmedTransactions[blockIndex][bucketIndex]--;
       } else {
-        // todo: why we in this branch in tests?
-        throw new Error(`Blockpolicy error, mempool tx removed from blockIndex=${blockIndex},bucketIndex=${bucketIndex} already`);
+        // todo: It is not actually error, but warning maybe?
+        throw new Error(`Can't remove tx: transactions at blockIndex = ${blockIndex}, bucketIndex = ${bucketIndex} already empty`);
       }
     }
     // Only counts as a failure if not confirmed for entire period

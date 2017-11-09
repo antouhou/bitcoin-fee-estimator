@@ -114,7 +114,7 @@ const rawMempool = {
   },
   '97a6dea30f9968bac9d24cf37783e2c8d3d2dda0b5a6149207db9373e6a9db9a': {
     size: 23818,
-    fee: 0.00023823,
+    fee: 0.0023823,
     modifiedfee: 0.00023823,
     time: 1510165507,
     height: 23212,
@@ -169,14 +169,37 @@ describe('Estimator', () => {
   describe('.addTransactionToMempool()', () => {
     it('should add transactions to mempool', () => {
       const estimator = new Estimator();
-      //For this test we will assume that current block does not contain transactions
       estimator.processBlock(currentBlock.height, currentBlock.tx);
       const mempool = copyMempool();
       const mempoolSize = Object.keys(mempool).length;
       expect(estimator.mempoolTransactions.size).to.equal(0);
       estimator.addTransactionsToMempool(mempool);
       expect(estimator.mempoolTransactions.size).to.equal(mempoolSize);
+    });
+    it('should add transactions to mempool, add to stats and remove them when they are confirmed', () => {
+      const estimator = new Estimator();
+      estimator.processBlock(currentBlock.height, currentBlock.tx);
+      const mempool = copyMempool();
+      const mempoolSize = Object.keys(mempool).length;
+      expect(estimator.mempoolTransactions.size).to.equal(0);
+      estimator.addTransactionsToMempool(mempool);
+      expect(estimator.mempoolTransactions.size).to.equal(mempoolSize);
+      /* 28 is corresponding to block 23212 (blockHeight % maxNumberOfConfirmations for this stat),
+      * 0 to fee 1000 satoshis per k (lower bound of buckets),
+      * which is used in test data set
+      */
+      expect(estimator.feeStats.unconfirmedTransactions[28][0]).to.equal(6);
+      // Same way, 47 is corresponding to fee 10k per k
+      expect(estimator.feeStats.unconfirmedTransactions[28][47]).to.equal(1);
+
       estimator.processBlock(block.height, block.tx);
+      /* In mempool was 7 transactions,
+      *  5 then was included in block (6 actually, but the first is coinbase),
+      * so there are should be two transactions in mempool
+       */
+      expect(estimator.mempoolTransactions.size).to.equal(2);
+      expect(estimator.feeStats.unconfirmedTransactions[28][0]).to.equal(2);
+      expect(estimator.feeStats.unconfirmedTransactions[28][47]).to.equal(0);
     });
   });
 
