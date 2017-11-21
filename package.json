@@ -1,6 +1,6 @@
 {
   "name": "bitcoin-fee-estimator",
-  "version": "1.0.0",
+  "version": "1.0.1",
   "description": "Implemetnation of fee estimation algorithm of bitcoin-core 0.15.x in JavaScript",
   "main": "index.js",
   "scripts": {

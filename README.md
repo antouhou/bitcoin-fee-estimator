@@ -8,7 +8,7 @@ on pre 0.15.x versions. But there are many bitcoin forks that still using older 
 With this library, it is now possible to estimate fees in a new way for every pre-0.15.x fork.
 
 ## Installation
-`npm i bitcon-fee-estimator --save`
+`npm i bitcoin-fee-estimator --save`
 
 ## Usage
 
