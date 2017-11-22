@@ -36,3 +36,9 @@ estimator.estimateSmartFee(1).getFeePerK();
 ```
 **If you collected not enough data, estimator will always return zero.**
 **If you collected information only for 25 blocks, estimator will return zero if you will pass target above 25.**
+
+## Contributing
+
+To build the library you need to run `npm run build`. This will run eslint, transpile code for older versions of node, run tests.
+
+As this library designed to works on node versions 0.12 and above, in order to make sure everything is fine you need installed 0.12 version of node and run `tools/testOldNode.js` with it.

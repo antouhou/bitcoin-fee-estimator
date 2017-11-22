@@ -1,5 +1,3 @@
-node_modules/
-build/
 *.log
 .idea
 .nyc_output

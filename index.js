@@ -1,1 +1,2 @@
-module.exports = require('./src/Estimator');
+require('babel-polyfill');
+module.exports = require('./build/Estimator');
